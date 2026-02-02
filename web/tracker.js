@@ -30,7 +30,7 @@ var Devizer = {
                 }
             }
         }
-        req.open('GET', 'https://product.devizer.pro/admin/', true);
+        req.open('GET', 'https://product.devizer.pro', true);
         req.setRequestHeader('DAPROPS', propertiesAsString);
         req.send(null);
     }
