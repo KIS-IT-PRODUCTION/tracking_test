@@ -17,7 +17,8 @@ void main() {
         ..id = id
         ..style.width = '100%'
         ..style.height = '100%'
-        // Пропускаємо кліки крізь HTML, щоб Flutter не ламався
+        // pointer-events: none робить елемент "прозорим" для мишки.
+        // Клік проходить крізь нього у Flutter, а ми потім програмно клікаємо по ньому.
         ..style.pointerEvents = 'none' 
         ..style.backgroundColor = 'rgba(0,0,0,0)'
         ..setAttribute('data-ts1-id', id);
@@ -62,20 +63,21 @@ class TrackedBtn extends StatelessWidget {
   });
 
   void _handleTap() {
-    print('Flutter: Button tapped. Triggering JS event for ID: $id');
-    
-    // А. Програмно створюємо подію кліку для скрипта
-    if (_elementRegistry.containsKey(id)) {
-      // ВИПРАВЛЕННЯ ТУТ: canBubble замість bubbles
-      final event = html.MouseEvent('click', 
-        view: html.window, 
-        canBubble: true, 
-        cancelable: true
-      );
-      _elementRegistry[id]?.dispatchEvent(event);
-    } 
+    // ЕТАП 1: Спроба трекінгу (Safe Mode)
+    try {
+      if (_elementRegistry.containsKey(id)) {
+        print('JS Track: Click sent to ID: $id');
+        // Використовуємо нативний метод click(), він надійніший за dispatchEvent
+        _elementRegistry[id]?.click();
+      } else {
+        print('JS Track Warning: HTML Element not found for ID: $id');
+      }
+    } catch (e) {
+      // Якщо JS впаде, ми просто виведемо помилку, але НЕ зупинимо програму
+      print('JS Track Error (Ignored): $e');
+    }
 
-    // Б. Виконуємо логіку Flutter
+    // ЕТАП 2: Логіка Flutter (Виконується завжди!)
     onTap();
   }
 
@@ -83,7 +85,7 @@ class TrackedBtn extends StatelessWidget {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        // ШАР 1: HTML ТЕГ (Пропускає кліки)
+        // ШАР 1: HTML ТЕГ (Невидимий, для скрипта)
         Positioned.fill(
           child: HtmlElementView(
             viewType: 'tracked-tag',
@@ -91,7 +93,7 @@ class TrackedBtn extends StatelessWidget {
           ),
         ),
 
-        // ШАР 2: ВІЗУАЛЬНА КНОПКА + ПЕРЕХОПЛЮВАЧ
+        // ШАР 2: ВІЗУАЛЬНА КНОПКА + ОБРОБНИК
         GestureDetector(
           onTap: _handleTap,
           behavior: HitTestBehavior.translucent,
@@ -147,7 +149,7 @@ class _TestPageState extends State<TestPage> {
                   child: ElevatedButton(
                     onPressed: () {}, 
                     style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
-                    child: const Text("Увійти (Fix)"),
+                    child: const Text("Увійти"),
                   ),
                 ),
 
@@ -155,12 +157,17 @@ class _TestPageState extends State<TestPage> {
                 const Text("Скрол тест"),
                 const SizedBox(height: 20),
 
-                // --- НИЖНЯ КНОПКА ---
+                // --- ТЕСТОВА КНОПКА ЗНИЗУ ---
                 TrackedBtn(
                   id: 'scroll_test_btn',
                   onTap: () {
+                    // Це повідомлення підтверджує, що Flutter частина працює
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Нижня кнопка працює!")),
+                      const SnackBar(
+                        content: Text("Нижня кнопка працює!"),
+                        backgroundColor: Colors.green,
+                        duration: Duration(seconds: 1),
+                      ),
                     );
                   },
                   child: ElevatedButton(
@@ -169,7 +176,7 @@ class _TestPageState extends State<TestPage> {
                       backgroundColor: Colors.orange,
                       minimumSize: const Size(double.infinity, 50),
                     ),
-                    child: const Text("Тестова кнопка"),
+                    child: const Text("Тестова кнопка (Tracking)"),
                   ),
                 ),
                 const SizedBox(height: 50),
