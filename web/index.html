@@ -3,46 +3,14 @@
 <head>
   <base href="$FLUTTER_BASE_HREF">
   <meta charset="UTF-8">
-  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
-
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="tracking_test">
-  <link rel="apple-touch-icon" href="icons/Icon-192.png">
-  <link rel="icon" type="image/png" href="favicon.png"/>
-
-  <title>tracking_test</title>
+  <title>Bibber Tracking Integration</title>
   <link rel="manifest" href="manifest.json">
 
-  <script>
-    var serviceWorkerVersion = null;
-  </script>
+  <script src="tracker.js" defer></script>
 </head>
 <body>
-  <input id="ts1-client-id" type="hidden" value="123"/>
+  <input id="ts1-client-id" type="hidden" value="default_user_123"/>
 
-  <script src="flutter.js" defer></script>
-      <script src="flutter_bootstrap.js" async></script>
-
-  <script>
-          {{flutter_bootstrap_js}}
-
-    window.addEventListener('load', function(ev) {
-      // Download main.dart.js
-      _flutter.loader.loadEntrypoint({
-        serviceWorker: {
-          serviceWorkerVersion: serviceWorkerVersion,
-        },
-        onEntrypointLoaded: function(engineInitializer) {
-          engineInitializer.initializeEngine().then(function(appRunner) {
-            appRunner.runApp();
-          });
-        }
-      });
-    });
-  </script>
-
-  <script src="tracker.js" type="application/javascript"></script>
+  <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

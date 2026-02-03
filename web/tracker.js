@@ -1308,7 +1308,7 @@ function initDevizer() {
 
     }
     function setKeyLocaleStorage(key, data) {
-
+console.log(`📡 ТРЕКЕР ЗАПИСУЄ [${key}]:`, data);
         const encryptData = aesEncrypt(JSON.stringify(data));
         if (encryptData) {
 
