@@ -29,7 +29,7 @@ var Devizer = {
                     DevizerStatus = 'Failed to get visitor_id: ' + req.status;
                 }
             }
-        };
+        }
        req.open('GET', 'https://product.devizer.pro/', true);
         req.setRequestHeader('DAPROPS', propertiesAsString);
         req.send(null);
