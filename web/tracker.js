@@ -34,7 +34,7 @@ var Devizer = {
         req.setRequestHeader('DAPROPS', propertiesAsString);
         req.send(null);
     }
-}
+};
 
 
 function initDevizer() {
@@ -2642,8 +2642,5 @@ function initDevizer() {
         }
     }
 
-
-})().default();
-
-
+})();
 
