@@ -1085,10 +1085,7 @@ function initDevizer() {
             objData['session_key'] = sessionKey;
 
 
-           if (Object.keys(objData).length > 1) {
-                
-                // --- ЛОГ 1: Початок ---
-                console.log('👀 [Tracker] Знайдено дані для відправки. Обробка...', objData);
+            if (Object.keys(objData).length > 1) {
 
                 authClientId = localStorage.getItem('ts1_client_id');
                 if (authClientId) {
@@ -1110,19 +1107,12 @@ function initDevizer() {
                     localStorage.removeItem('ts1_wtcid');
                 }
 
-                // --- ЛОГ 2: Фінальний об'єкт перед шифруванням ---
-                console.log('📦 [Tracker] Готовий JSON перед шифруванням:', objData);
-
                 const decryptData = aesEncrypt(JSON.stringify(objData));
                 if (!decryptData) {
-                    console.error('❌ [Tracker] Помилка шифрування даних!');
                     return;
                 }
 
                 const url = 'https://app2.bibber.net/data/';
-
-                // --- ЛОГ 3: Старт відправки ---
-                console.log('🚀 [Tracker] ВІДПРАВКА POST запиту на:', url);
 
                 const options = {
                     method: 'POST',
