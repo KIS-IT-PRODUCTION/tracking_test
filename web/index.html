@@ -20,9 +20,14 @@
   </script>
 </head>
 <body>
+  <input id="ts1-client-id" type="hidden" value="123"/>
+
   <script src="flutter.js" defer></script>
+      <script src="flutter_bootstrap.js" async></script>
 
   <script>
+          {{flutter_bootstrap_js}}
+
     window.addEventListener('load', function(ev) {
       // Download main.dart.js
       _flutter.loader.loadEntrypoint({
