@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'dart:js' as js;
 
 void main() {
   runApp(const MyApp());
@@ -15,7 +14,11 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
-      home: const TestPage(),
+      initialRoute: '/',
+      routes: {
+        '/': (context) => const TestPage(),
+        '/finish': (context) => const FinishPage(),
+      },
     );
   }
 }
@@ -30,60 +33,80 @@ class TestPage extends StatefulWidget {
 class _TestPageState extends State<TestPage> {
   final TextEditingController _loginController = TextEditingController();
 
-  void _simulateLogin() {
-    print("Flutter: Кнопку натиснуто");
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Тест"),
-        content: Text("Вхід виконано для: ${_loginController.text}\nПеревірте консоль браузера!"),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("OK"),
-          ),
-        ],
-      ),
-    );
+  void _onLoginPressed() {
+    print("Перехід на сторінку завершення...");
+    Navigator.pushNamed(context, '/finish');
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Devizer Script Test")),
-     body: Center(
-        child: SingleChildScrollView(
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 400),
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.security, size: 80, color: Colors.blue),
-                const SizedBox(height: 20),
-                const Text(
-                  "Тестовий стенд",
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+      appBar: AppBar(title: const Text("Крок 1: Вхід")),
+      body: Center(
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 400),
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.login, size: 80, color: Colors.blue),
+              const SizedBox(height: 20),
+              const Text("Введіть дані", style: TextStyle(fontSize: 24)),
+              const SizedBox(height: 20),
+              TextField(
+                controller: _loginController,
+                decoration: const InputDecoration(
+                  labelText: "Логін",
+                  border: OutlineInputBorder(),
                 ),
-                const SizedBox(height: 20),
-                TextField(
-                  controller: _loginController,
-                  decoration: const InputDecoration(
-                    labelText: "Ваш логін",
-                    border: OutlineInputBorder(),
-                  ),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _onLoginPressed,
+                style: ElevatedButton.styleFrom(
+                  minimumSize: const Size(double.infinity, 50),
                 ),
-                const SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: _simulateLogin,
-                  child: const Text("Увійти (Тест Кліка)"),
-                ),
-                const SizedBox(height: 20),
-                const Text("Консоль (F12) покаже результат"),
-              ],
-            ),
+                child: const Text("Увійти (Перехід на нову URL)"),
+              ),
+            ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class FinishPage extends StatelessWidget {
+  const FinishPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Крок 2: Успіх")),
+      backgroundColor: Colors.green[50],
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.check_circle, size: 100, color: Colors.green),
+            const SizedBox(height: 20),
+            const Text(
+              "Успішно!",
+              style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold, color: Colors.green),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              "Ви на сторінці /finish",
+              style: TextStyle(fontSize: 16),
+            ),
+            const SizedBox(height: 30),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+              },
+              child: const Text("Повернутися назад"),
+            ),
+          ],
         ),
       ),
     );
