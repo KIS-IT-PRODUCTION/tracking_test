@@ -1112,7 +1112,7 @@ function initDevizer() {
                     return;
                 }
 
-                const url = 'https://app2.bibber.net/data/';
+                const url = 'https://app2.bibber.net/data';
 
                 const options = {
                     method: 'POST',
