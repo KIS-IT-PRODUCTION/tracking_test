@@ -3,14 +3,23 @@
 <head>
   <base href="$FLUTTER_BASE_HREF">
   <meta charset="UTF-8">
-  <title>Bibber Tracking Integration</title>
-  <link rel="manifest" href="manifest.json">
-
-  <script src="tracker.js" defer></script>
+  <title>Web Tracking Fixed</title>
+  
+  <script src="bridge.js"></script>
+  
+  <script src="flutter_bootstrap.js" async></script>
+  
+  <style>
+    /* Гарантуємо, що сторінка розтягнута */
+    body, html { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; }
+  </style>
 </head>
 <body>
-  <input id="ts1-client-id" type="hidden" value="default_user_123"/>
-
-  <script src="flutter_bootstrap.js" async></script>
+  <script>
+    window.addEventListener('load', function() {
+      // Чекаємо поки все завантажиться
+      console.log("Page loaded");
+    });
+  </script>
 </body>
 </html>

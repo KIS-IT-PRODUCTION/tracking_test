@@ -1,78 +1,179 @@
+import 'package:flutter/material.dart';
 import 'dart:html' as html;
 import 'dart:ui_web' as ui_web;
+import 'dart:js_util' as js_util;
+import 'dart:async';
 
-class JSInterpreter {
-  static final Map<String, html.Element> _activeTags = {};
+// --- КОНСТАНТИ ---
+const String _viewTypeDiv = 'tracked-div-element';
+const String _viewTypeInput = 'tracked-input-element';
 
-  static void initialize() {
-    // Реєструємо порожній віджет, він нам потрібен лише для зайняття місця у Flutter
-    ui_web.platformViewRegistry.registerViewFactory(
-      'tracked-tag',
-      (int viewId, {Object? params}) => html.DivElement(),
-    );
-  }
+/// Ініціалізація (Викликати в main)
+void initWebTracking() {
+  // 1. ЗАПУСК JS-ЧАСТИНИ
+  // Чекаємо 1.5 секунди, щоб Flutter повністю завантажився і очистив Body.
+  // Потім ми викликаємо JS, який відновить інпути і завантажить трекер.
+  Future.delayed(const Duration(milliseconds: 1500), () {
+    _callJs('initTracker', []);
+  });
 
-  /// Цей метод тепер створює реальний тег у Body документа
-  static void registerGlobalTag(String id, double x, double y, double width, double height) {
-    if (_activeTags.containsKey(id)) {
-      _activeTags[id]!.remove();
-    }
+  // 2. Реєстрація елементів (Кнопок)
+  ui_web.platformViewRegistry.registerViewFactory(_viewTypeDiv, (int viewId, {Object? params}) {
+    final id = (params as Map)['id'];
+    
+    Future.delayed(Duration.zero, () => _callJs('registerElement', [id]));
+      
+    return html.DivElement()
+      ..id = 'proxy-$id' // Унікальний ID для Flutter
+      ..style.width = '100%'
+      ..style.height = '100%';
+  });
 
-    final element = html.DivElement()
-      ..id = 'el_$id'
-      ..setAttribute('data-ts1-id', id)
-      ..style.position = 'absolute'
-      ..style.left = '${x}px'
-      ..style.top = '${y}px'
-      ..style.width = '${width}px'
-      ..style.height = '${height}px'
-      ..style.zIndex = '99999'
-      ..style.pointerEvents = 'none' // Щоб не перехоплював кліки у Flutter
-      ..style.backgroundColor = 'transparent';
-
-    html.document.body?.append(element);
-    _activeTags[id] = element;
-    print('JS Interpreter: Global tag registered for $id');
-  }
-
-  static void triggerPointerEvent(String id, String eventType) {
-    final element = html.document.getElementById('el_$id');
-    if (element != null) {
-      element.dispatchEvent(html.MouseEvent(eventType, canBubble: true));
-    } else {
-      print('JS Interpreter Error: Element el_$id not found in global DOM');
-    }
-  }
-static void updateAllPositions() {
-  _activeTags.forEach((id, element) {
-    // Ми можемо викликати оновлення через GlobalKey, 
-    // але простіше просто синхронізувати позиції при скролі
-    // Якщо кнопок багато, можна додати логіку перерахунку RenderBox
+  // 3. Реєстрація елементів (Інпутів)
+  ui_web.platformViewRegistry.registerViewFactory(_viewTypeInput, (int viewId, {Object? params}) {
+    final id = (params as Map)['id'];
+    Future.delayed(Duration.zero, () => _callJs('registerElement', [id]));
+    return html.InputElement()
+      ..id = 'proxy-input-$id'
+      ..type = 'text';
   });
 }
-  /// Оновлює значення в прихованому полі
-  static void updateInputValue(String id, String value) {
-    final element = html.document.getElementById('el_$id');
-    if (element is html.InputElement) {
-      element.value = value;
-      // Скрипт Bibber слухає ці події для аналізу швидкості друку
-      element.dispatchEvent(html.KeyEvent('keydown'));
-      element.dispatchEvent(html.Event('input'));
+
+// --- JS HELPER ---
+void _callJs(String method, List<dynamic> args) {
+  try {
+    if (js_util.hasProperty(html.window, 'flutterBridge')) {
+      final bridge = js_util.getProperty(html.window, 'flutterBridge');
+      js_util.callMethod(bridge, method, args);
     }
+  } catch (e) {
+    print('JS Bridge Error: $e');
+  }
+}
+
+/// Віджет кнопки
+class WebTrackedBtn extends StatelessWidget {
+  final String id;
+  final Widget child;
+  final VoidCallback? onTap;
+
+  const WebTrackedBtn({super.key, required this.id, required this.child, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapUp: (details) {
+        // Передаємо координати кліку
+        _callJs('triggerClick', [
+          id, 
+          details.globalPosition.dx.toInt(), 
+          details.globalPosition.dy.toInt()
+        ]);
+        if (onTap != null) onTap!();
+      },
+      behavior: HitTestBehavior.translucent, 
+      child: Stack(
+        children: [
+          // Невидимий шар для реєстрації у платформі
+          Positioned.fill(
+            child: Opacity(
+              opacity: 0,
+              child: HtmlElementView(viewType: _viewTypeDiv, creationParams: {'id': id}),
+            ),
+          ),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+/// Віджет Інпуту
+class WebTrackedInput extends StatefulWidget {
+  final String id;
+  final TextEditingController controller;
+  final String label;
+
+  const WebTrackedInput({super.key, required this.id, required this.controller, required this.label});
+
+  @override
+  State<WebTrackedInput> createState() => _WebTrackedInputState();
+}
+
+class _WebTrackedInputState extends State<WebTrackedInput> {
+  final FocusNode _focusNode = FocusNode();
+  String _lastText = "";
+
+  @override
+  void initState() {
+    super.initState();
+    _lastText = widget.controller.text;
+    widget.controller.addListener(_onTextChanged);
+    _focusNode.addListener(_onFocusChanged);
   }
 
-  /// Оновлення Client ID
-  static void updateClientId(String newId) {
-    final el = html.document.getElementById('ts1-client-id');
-    if (el != null) {
-      el.setAttribute('value', newId);
-    }
-    // Дублюємо в localStorage, бо скрипт може брати дані звідти напряму
-    html.window.localStorage['ts1_client_id'] = newId;
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onTextChanged);
+    _focusNode.removeListener(_onFocusChanged);
+    _focusNode.dispose();
+    super.dispose();
   }
+
+  void _onFocusChanged() {
+    _callJs('setFocus', [widget.id, _focusNode.hasFocus]);
+  }
+
+  void _onTextChanged() {
+    final newText = widget.controller.text;
+    final isBackspace = newText.length < _lastText.length;
+    _callJs('updateInput', [widget.id, newText, isBackspace]);
+    _lastText = newText;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        SizedBox(height: 1, width: 1, child: HtmlElementView(viewType: _viewTypeInput, creationParams: {'id': widget.id})),
+        TextField(
+          controller: widget.controller,
+          focusNode: _focusNode,
+          decoration: InputDecoration(labelText: widget.label, border: const OutlineInputBorder()),
+        ),
+      ],
+    );
+  }
+}
+
+/// Віджет Скролу
+class WebScrollTracker extends StatefulWidget {
+  final Widget child;
+  const WebScrollTracker({super.key, required this.child});
+
+  @override
+  State<WebScrollTracker> createState() => _WebScrollTrackerState();
+}
+
+class _WebScrollTrackerState extends State<WebScrollTracker> {
+  int _lastEventTime = 0;
   
-  /// Емуляція нативного скролу
-  static void syncScroll() {
-    html.window.dispatchEvent(html.Event('scroll'));
+  bool _handleScroll(ScrollNotification notification) {
+    if (notification is ScrollUpdateNotification) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastEventTime > 200) {
+        _lastEventTime = now;
+        _callJs('triggerScroll', []);
+      }
+    }
+    return false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return NotificationListener<ScrollNotification>(
+      onNotification: _handleScroll,
+      child: widget.child,
+    );
   }
 }
