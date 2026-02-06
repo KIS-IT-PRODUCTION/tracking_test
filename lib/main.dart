@@ -80,8 +80,16 @@ class WebTrackedBtn extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTapUp: (details) {
+        // 1. Спочатку відправляємо дані в трекер (Клік)
         _callJs('triggerClick', [id, details.globalPosition.dx.toInt(), details.globalPosition.dy.toInt()]);
-        if (onTap != null) onTap!();
+        
+        // 2. Робимо невелику паузу (150мс), щоб трекер встиг обробити клік 
+        // до того, як зміниться сторінка
+        if (onTap != null) {
+          Future.delayed(const Duration(milliseconds: 150), () {
+            onTap!();
+          });
+        }
       },
       child: Stack(
         children: [
@@ -227,11 +235,25 @@ class _TestPageState extends State<TestPage> {
                   const Icon(Icons.login, size: 80, color: Colors.blue),
                   WebTrackedInput(id: 'login_input_field', label: 'Логін', controller: _loginController),
                   const SizedBox(height: 20),
+                  
+                  // ТУТ ВІДБУВАЄТЬСЯ ПЕРЕХІД
                   WebTrackedBtn(
                     id: 'login_btn_top', 
-                    onTap: () => Navigator.pushNamed(context, '/finish'),
-                    child: ElevatedButton(onPressed: (){}, child: const Text("Увійти")),
+                    onTap: () {
+                      // Цей код виконається через 150мс після кліку
+                      Navigator.pushNamed(context, '/finish');
+                    },
+                    child: ElevatedButton(
+                      onPressed: null, // Вимикаємо стандартний onPressed, бо керуємо через onTap
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue, // Колір кнопки
+                        disabledBackgroundColor: Colors.blue, // Щоб виглядала активною
+                        disabledForegroundColor: Colors.white,
+                      ),
+                      child: const Text("Увійти"),
+                    ),
                   ),
+                  
                   const SizedBox(height: 1000), // Довгий скрол
                   WebTrackedBtn(
                     id: 'scroll_btn', 
@@ -256,11 +278,21 @@ class FinishPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("Крок 2: Успіх")),
+      backgroundColor: Colors.green[50],
       body: Center(
-        child: WebTrackedBtn(
-          id: 'back_btn',
-          onTap: () => Navigator.pop(context),
-          child: ElevatedButton(onPressed: (){}, child: const Text("Назад")),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.check_circle, size: 100, color: Colors.green),
+            const SizedBox(height: 20),
+            const Text("Ви успішно увійшли!", style: TextStyle(fontSize: 24)),
+            const SizedBox(height: 30),
+            WebTrackedBtn(
+              id: 'back_btn',
+              onTap: () => Navigator.pop(context),
+              child: ElevatedButton(onPressed: null, child: const Text("Назад")),
+            ),
+          ],
         ),
       ),
     );
