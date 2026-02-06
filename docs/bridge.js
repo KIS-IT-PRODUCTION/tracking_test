@@ -29,8 +29,19 @@ window.flutterBridge = {
         this._ensureHiddenInput('ts1-client-id', '123'); // ВАШ ID КЛІЄНТА
         
         const script = document.createElement('script');
-        // Використовуємо абсолютний шлях, щоб уникнути помилок 404
-        script.src = window.location.origin + '/tracker.js';
+
+        // --- ВИПРАВЛЕННЯ ДЛЯ GITHUB PAGES ---
+        // 1. Шукаємо тег <base>, який генерує Flutter (наприклад: <base href="/my-app/">)
+        const baseEl = document.querySelector('base');
+        
+        // 2. Якщо тег є, беремо його шлях. Якщо ні — беремо корінь сайту.
+        const baseUrl = baseEl ? baseEl.href : (window.location.origin + '/');
+        
+        // 3. Формуємо повний шлях до tracker.js
+        script.src = baseUrl + 'tracker.js';
+        
+        console.log("[Bridge] Loading tracker from:", script.src);
+
         script.async = true;
         document.head.appendChild(script);
         
@@ -43,7 +54,6 @@ window.flutterBridge = {
         this.virtualScrollY = pixels;
         
         // 2. Емулюємо висоту сторінки (щоб трекер міг порахувати % прокрутки)
-        // Якщо Flutter каже, що ми прокрутили на 5000px, а body має висоту 0, трекер збожеволіє.
         if (document.body.scrollHeight < pixels + window.innerHeight) {
             document.body.style.minHeight = (pixels + window.innerHeight + 200) + 'px';
         }
