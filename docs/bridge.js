@@ -1,110 +1,119 @@
 window.flutterBridge = {
     elements: {},
     isTrackerLoaded: false,
-    // Змінна, де ми зберігаємо позицію скролу, яку передав Flutter
     virtualScrollY: 0, 
 
     initTracker: function() {
         if (this.isTrackerLoaded) return;
         
-        console.log("[Bridge] Initializing & Hijacking Scroll...");
-
-        // --- МАГІЯ: ПЕРЕХОПЛЕННЯ СКРОЛУ ---
-        // Ми підміняємо стандартні властивості браузера.
-        // Коли tracker.js запитає window.scrollY, він отримає наше значення.
         try {
             const getScroll = () => this.virtualScrollY;
-
             Object.defineProperty(window, 'scrollY', { get: getScroll, configurable: true });
             Object.defineProperty(window, 'pageYOffset', { get: getScroll, configurable: true });
-            
-            // Деякі старі трекери шукають тут:
-            Object.defineProperty(document.documentElement, 'scrollTop', { get: getScroll, configurable: true, set: (v) => {} });
-            Object.defineProperty(document.body, 'scrollTop', { get: getScroll, configurable: true, set: (v) => {} });
-        } catch (e) {
-            console.warn("[Bridge] Scroll hijacking warning:", e);
-        }
+        } catch (e) {}
 
-        // --- СТАНДАРТНИЙ СТАРТ ---
-        this._ensureHiddenInput('ts1-client-id', '123'); // ВАШ ID КЛІЄНТА
-        
-        const script = document.createElement('script');
-
-        // --- ВИПРАВЛЕННЯ ДЛЯ GITHUB PAGES ---
-        // 1. Шукаємо тег <base>, який генерує Flutter (наприклад: <base href="/my-app/">)
+        this._ensureHiddenInput('ts1-client-id', '123');
         const baseEl = document.querySelector('base');
-        
-        // 2. Якщо тег є, беремо його шлях. Якщо ні — беремо корінь сайту.
         const baseUrl = baseEl ? baseEl.href : (window.location.origin + '/');
-        
-        // 3. Формуємо повний шлях до tracker.js
+        const script = document.createElement('script');
         script.src = baseUrl + 'tracker.js';
-        
-        console.log("[Bridge] Loading tracker from:", script.src);
-
         script.async = true;
         document.head.appendChild(script);
-        
         this.isTrackerLoaded = true;
     },
 
-    // --- ОТРИМАННЯ СКРОЛУ ВІД FLUTTER ---
     triggerScroll: function(pixels) {
-        // 1. Зберігаємо реальні пікселі від Flutter у віртуальну змінну
         this.virtualScrollY = pixels;
-        
-        // 2. Емулюємо висоту сторінки (щоб трекер міг порахувати % прокрутки)
         if (document.body.scrollHeight < pixels + window.innerHeight) {
             document.body.style.minHeight = (pixels + window.innerHeight + 200) + 'px';
         }
-
-        // 3. Кричимо браузеру, що скрол відбувся
         window.dispatchEvent(new Event('scroll', { bubbles: true }));
-        document.dispatchEvent(new Event('scroll', { bubbles: true }));
     },
 
-    // --- ЗМІНА URL (sU) ---
     triggerUrlChange: function(newUrl) {
-        // При переході на нову сторінку скидаємо скрол
         this.virtualScrollY = 0;
-        console.log("[Bridge] Virtual Navigation to:", newUrl);
-        
-        // Емулюємо події навігації
         window.dispatchEvent(new Event('popstate'));
         window.dispatchEvent(new Event('hashchange'));
     },
 
-    // --- КЛІКИ ---
     triggerClick: function(id, x, y) {
         const el = this._getOrCreateElement(id, 'div');
-        // Телепортуємо елемент під курсор
-        el.style.left = x + 'px'; 
-        el.style.top = y + 'px';
-
-        const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, screenX: x, screenY: y };
+        el.style.left = x + 'px'; el.style.top = y + 'px';
+        const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
         el.dispatchEvent(new MouseEvent('mousedown', opts));
         el.dispatchEvent(new MouseEvent('mouseup', opts));
         el.dispatchEvent(new MouseEvent('click', opts));
     },
 
-    // --- ВВІД ТЕКСТУ ---
-    updateInput: function(id, text, isBackspace) {
-        const el = this._getOrCreateElement(id, 'input');
-        el.value = text;
-        el.dispatchEvent(new InputEvent('input', { 
-            bubbles: true, 
-            inputType: isBackspace ? 'deleteContentBackward' : 'insertText',
-            data: text 
-        }));
-    },
-    
+    // ==========================================
+    // === ГОЛОВНЕ ВИПРАВЛЕННЯ ДЛЯ ПОЛЯ "a" ===
+    // ==========================================
     setFocus: function(id, hasFocus) {
-         const el = this._getOrCreateElement(id, 'input');
-         if(hasFocus) el.focus(); else el.blur();
+        const el = this._getOrCreateElement(id, 'input');
+        
+        if (hasFocus) {
+            // 1. ЕМУЛЯЦІЯ ФІЗИЧНОГО КЛІКУ (Щоб трекер повірив)
+            // Трекери чекають mousedown перед фокусом
+            const mouseOpts = { bubbles: true, cancelable: true, view: window };
+            el.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
+            el.dispatchEvent(new MouseEvent('mouseup', mouseOpts));
+            el.dispatchEvent(new MouseEvent('click', mouseOpts));
+
+            // 2. ЕМУЛЯЦІЯ ФОКУСУ
+            // focus - не спливає, focusin - спливає (важливо для трекера)
+            el.dispatchEvent(new FocusEvent('focus', { bubbles: false, cancelable: true, view: window }));
+            el.dispatchEvent(new FocusEvent('focusin', { bubbles: true, cancelable: true, view: window }));
+        } else {
+            // ДЕАКТИВАЦІЯ
+            el.dispatchEvent(new Event('change', { bubbles: true })); 
+            el.dispatchEvent(new FocusEvent('blur', { bubbles: false, cancelable: true, view: window }));
+            el.dispatchEvent(new FocusEvent('focusout', { bubbles: true, cancelable: true, view: window }));
+        }
     },
 
-    // --- ДОПОМІЖНІ ФУНКЦІЇ ---
-    registerElement: function(id) { this._getOrCreateElement(id, 'div'); },
+    typeChar: function(id, text, char, start, end) {
+        const el = this._getOrCreateElement(id, 'input');
+        el.value = text;
+        
+        if (typeof start === 'number') {
+            try { el.setSelectionRange(start, end); } catch(e){}
+        }
+
+        const keyOpts = { 
+            key: char, 
+            code: `Key${char.toUpperCase()}`, 
+            bubbles: true, 
+            cancelable: true, 
+            view: window 
+        };
+        
+        el.dispatchEvent(new KeyboardEvent('keydown', keyOpts));
+        el.dispatchEvent(new KeyboardEvent('keypress', keyOpts));
+        el.dispatchEvent(new InputEvent('input', { 
+            bubbles: true, 
+            inputType: 'insertText',
+            data: char,
+            view: window
+        }));
+        el.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
+    },
+
+    pressBackspace: function(id, text, start, end) {
+        const el = this._getOrCreateElement(id, 'input');
+        el.value = text;
+        try { el.setSelectionRange(start, end); } catch(e){}
+
+        const bsOpts = { key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true, cancelable: true, view: window };
+
+        el.dispatchEvent(new KeyboardEvent('keydown', bsOpts));
+        el.dispatchEvent(new InputEvent('input', { 
+            bubbles: true, 
+            inputType: 'deleteContentBackward',
+            data: null,
+            view: window
+        }));
+        el.dispatchEvent(new KeyboardEvent('keyup', bsOpts));
+    },
 
     _getOrCreateElement: function(id, type) {
         let el = document.getElementById(id);
@@ -112,13 +121,16 @@ window.flutterBridge = {
         if (!el) {
             el = document.createElement(type);
             el.id = id;
-            el.style.position = 'fixed'; 
-            el.style.zIndex = '99999'; 
-            el.style.opacity = '0.01'; 
-            el.style.pointerEvents = 'none';
-            el.style.width = '10px'; 
-            el.style.height = '10px';
             el.setAttribute('data-ts1-id', id); 
+            // Використовуємо pointer-events: auto для JS подій, але ховаємо візуально
+            el.style.position = 'fixed';
+            el.style.opacity = '0.01'; 
+            el.style.zIndex = '-1'; 
+            el.style.top = '0';
+            el.style.left = '0';
+            // Важливо: дозволяємо події, але елемент під низом
+            el.style.pointerEvents = 'auto'; 
+            
             document.body.appendChild(el);
             this.elements[id] = el;
         }

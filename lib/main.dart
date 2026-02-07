@@ -7,7 +7,6 @@ import 'dart:async';
 const String _viewTypeDiv = 'tracked-div-element';
 const String _viewTypeInput = 'tracked-input-element';
 
-// Глобальний обсервер для навігації
 final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
 
 void main() {
@@ -17,13 +16,11 @@ void main() {
 
 void initWebTracking() {
   ui_web.platformViewRegistry.registerViewFactory(_viewTypeDiv, (int viewId, {Object? params}) {
-    final id = (params as Map)['id'];
-    return html.DivElement()..id = 'flutter-proxy-div-$id'..style.display = 'none';
+    return html.DivElement()..id = 'flutter-proxy-div-${(params as Map)['id']}'..style.display = 'none';
   });
 
   ui_web.platformViewRegistry.registerViewFactory(_viewTypeInput, (int viewId, {Object? params}) {
-    final id = (params as Map)['id'];
-    return html.InputElement()..id = 'flutter-proxy-input-$id'..type = 'hidden';
+    return html.InputElement()..id = 'flutter-proxy-input-${(params as Map)['id']}'..type = 'hidden';
   });
 
   Future.delayed(const Duration(seconds: 1), () {
@@ -42,32 +39,21 @@ void _callJs(String method, List<dynamic> args) {
   }
 }
 
-// --- СПЕЦІАЛЬНИЙ КЛАС ДЛЯ "sU" (ВІДСТЕЖЕННЯ СТОРІНОК) ---
+// --- NAVIGATION ---
 class TrackingNavigationObserver extends RouteObserver<ModalRoute<dynamic>> {
-  void _sendScreenView(PageRoute<dynamic> route) {
-    // Отримуємо назву сторінки (наприклад "/finish")
-    final String screenName = route.settings.name ?? 'unknown';
-    // Викликаємо JS, щоб оновити "sU"
-    _callJs('triggerUrlChange', [screenName]);
-  }
-
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
     super.didPush(route, previousRoute);
-    if (route is PageRoute) _sendScreenView(route);
+    if (route.settings.name != null) _callJs('triggerUrlChange', [route.settings.name]);
   }
-
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
     super.didPop(route, previousRoute);
-    if (previousRoute is PageRoute && route is PageRoute) {
-      _sendScreenView(previousRoute);
-    }
+    if (previousRoute?.settings.name != null) _callJs('triggerUrlChange', [previousRoute!.settings.name]);
   }
 }
 
-// --- ВІДЖЕТИ ---
-
+// --- BUTTON ---
 class WebTrackedBtn extends StatelessWidget {
   final String id;
   final Widget child;
@@ -80,13 +66,9 @@ class WebTrackedBtn extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTapUp: (details) {
-        // 1. Спочатку відправляємо дані в трекер (Клік)
         _callJs('triggerClick', [id, details.globalPosition.dx.toInt(), details.globalPosition.dy.toInt()]);
-        
-        // 2. Робимо невелику паузу (150мс), щоб трекер встиг обробити клік 
-        // до того, як зміниться сторінка
         if (onTap != null) {
-          Future.delayed(const Duration(milliseconds: 150), () {
+          Future.delayed(const Duration(milliseconds: 100), () {
             onTap!();
           });
         }
@@ -101,6 +83,7 @@ class WebTrackedBtn extends StatelessWidget {
   }
 }
 
+// --- INPUT (CORRECT DATA SENDING) ---
 class WebTrackedInput extends StatefulWidget {
   final String id;
   final TextEditingController controller;
@@ -115,32 +98,53 @@ class WebTrackedInput extends StatefulWidget {
 class _WebTrackedInputState extends State<WebTrackedInput> {
   final FocusNode _focusNode = FocusNode();
   String _lastText = "";
+  // Додаємо трекінг стану фокусу, щоб уникнути дублікатів
+  bool _wasFocused = false; 
 
   @override
   void initState() {
     super.initState();
     _lastText = widget.controller.text;
-    widget.controller.addListener(_onTextChanged);
+    widget.controller.addListener(_onControllerChanged);
     _focusNode.addListener(_onFocusChanged);
   }
 
   @override
   void dispose() {
-    widget.controller.removeListener(_onTextChanged);
+    widget.controller.removeListener(_onControllerChanged);
     _focusNode.removeListener(_onFocusChanged);
     _focusNode.dispose();
     super.dispose();
   }
 
   void _onFocusChanged() {
-    _callJs('setFocus', [widget.id, _focusNode.hasFocus]);
+    // Відправляємо подію тільки якщо стан реально змінився
+    if (_focusNode.hasFocus != _wasFocused) {
+      _wasFocused = _focusNode.hasFocus;
+      _callJs('setFocus', [widget.id, _wasFocused]);
+    }
   }
 
-  void _onTextChanged() {
-    final newText = widget.controller.text;
-    final isBackspace = newText.length < _lastText.length;
-    _callJs('updateInput', [widget.id, newText, isBackspace]);
-    _lastText = newText;
+  void _onControllerChanged() {
+    final text = widget.controller.text;
+    if (text == _lastText) return; 
+
+    final selection = widget.controller.selection;
+    final start = selection.isValid ? selection.start : text.length;
+    final end = selection.isValid ? selection.end : text.length;
+
+    if (text.length < _lastText.length) {
+      _callJs('pressBackspace', [widget.id, text, start, end]);
+    } else {
+       String newChar = "";
+       if (text.isNotEmpty && start > 0) {
+          newChar = text.substring(start - 1, start);
+       } else if (text.isNotEmpty) {
+          newChar = text.substring(text.length - 1);
+       }
+       _callJs('typeChar', [widget.id, text, newChar, start, end]);
+    }
+    _lastText = text;
   }
 
   @override
@@ -148,13 +152,23 @@ class _WebTrackedInputState extends State<WebTrackedInput> {
     return Stack(
       children: [
         SizedBox(height: 1, width: 1, child: HtmlElementView(viewType: _viewTypeInput, creationParams: {'id': widget.id})),
-        TextField(controller: widget.controller, focusNode: _focusNode, decoration: InputDecoration(labelText: widget.label, border: const OutlineInputBorder())),
+        TextField(
+          controller: widget.controller, 
+          focusNode: _focusNode, 
+          decoration: InputDecoration(labelText: widget.label, border: const OutlineInputBorder()),
+          onTap: () {
+            // Гарантуємо, що фокус встановлено
+            if (!_focusNode.hasFocus) {
+               FocusScope.of(context).requestFocus(_focusNode);
+            }
+          },
+        ),
       ],
     );
   }
 }
 
-// --- ВИПРАВЛЕНИЙ SCROLL TRACKER ("scr") ---
+// --- SCROLL TRACKER ---
 class WebScrollTracker extends StatefulWidget {
   final Widget child;
   const WebScrollTracker({super.key, required this.child});
@@ -169,10 +183,8 @@ class _WebScrollTrackerState extends State<WebScrollTracker> {
   bool _handleScroll(ScrollNotification notification) {
     if (notification is ScrollUpdateNotification) {
       final now = DateTime.now().millisecondsSinceEpoch;
-      // Частота оновлення 100мс (достатньо для трекера)
       if (now - _lastEventTime > 100) {
         _lastEventTime = now;
-        // Передаємо поточну позицію скролу (pixels) у JS
         _callJs('triggerScroll', [notification.metrics.pixels.toInt()]);
       }
     }
@@ -188,18 +200,16 @@ class _WebScrollTrackerState extends State<WebScrollTracker> {
   }
 }
 
-// --- UI ---
-
+// --- APP SHELL ---
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Tracking Complete Fix',
+      title: 'Tracking Final Fix',
       theme: ThemeData(primarySwatch: Colors.blue),
       initialRoute: '/',
-      // ВАЖЛИВО: Додаємо observer для навігації
       navigatorObservers: [TrackingNavigationObserver()], 
       routes: {
         '/': (context) => const TestPage(),
@@ -208,7 +218,6 @@ class MyApp extends StatelessWidget {
     );
   }
 }
-
 class TestPage extends StatefulWidget {
   const TestPage({super.key});
 
@@ -222,7 +231,7 @@ class _TestPageState extends State<TestPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Крок 1: Вхід")),
+      appBar: AppBar(title: const Text("Крок 1: Вхід (Довга сторінка)")),
       body: WebScrollTracker(
         child: SingleChildScrollView(
           child: Center(
@@ -233,32 +242,72 @@ class _TestPageState extends State<TestPage> {
                 children: [
                   const SizedBox(height: 40),
                   const Icon(Icons.login, size: 80, color: Colors.blue),
-                  WebTrackedInput(id: 'login_input_field', label: 'Логін', controller: _loginController),
+                  
+                  WebTrackedInput(
+                    id: 'login_input_field', 
+                    label: 'Логін', 
+                    controller: _loginController
+                  ),
+                  
                   const SizedBox(height: 20),
                   
-                  // ТУТ ВІДБУВАЄТЬСЯ ПЕРЕХІД
                   WebTrackedBtn(
                     id: 'login_btn_top', 
-                    onTap: () {
-                      // Цей код виконається через 150мс після кліку
-                      Navigator.pushNamed(context, '/finish');
-                    },
+                    onTap: () => Navigator.pushNamed(context, '/finish'),
                     child: ElevatedButton(
-                      onPressed: null, // Вимикаємо стандартний onPressed, бо керуємо через onTap
+                      onPressed: null, // null, бо обробляємо через WebTrackedBtn
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue, // Колір кнопки
-                        disabledBackgroundColor: Colors.blue, // Щоб виглядала активною
+                        backgroundColor: Colors.blue,
+                        disabledBackgroundColor: Colors.blue,
                         disabledForegroundColor: Colors.white,
+                        minimumSize: const Size(double.infinity, 50),
                       ),
                       child: const Text("Увійти"),
                     ),
                   ),
+
+                  const SizedBox(height: 50),
+                  const Text("Починаємо скролити вниз...", style: TextStyle(color: Colors.grey)),
+                  const SizedBox(height: 20),
+
+                  // --- ГЕНЕРАТОР КОНТЕНТУ ДЛЯ СКРОЛУ (50 блоків) ---
+                  ...List.generate(50, (index) {
+                    return Container(
+                      height: 100, // Кожен блок 100 пікселів
+                      margin: const EdgeInsets.only(bottom: 10),
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: index % 2 == 0 ? Colors.blue[50] : Colors.grey[100],
+                        border: Border.all(color: Colors.blue.withOpacity(0.2)),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        "Тестовий блок контенту #$index\n(Скрол: ${(index + 1) * 100} px)",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey[600]),
+                      ),
+                    );
+                  }),
+
+                  const SizedBox(height: 30),
                   
-                  const SizedBox(height: 1000), // Довгий скрол
                   WebTrackedBtn(
-                    id: 'scroll_btn', 
-                    onTap: (){}, 
-                    child: ElevatedButton(onPressed: (){}, child: const Text("Кнопка внизу"))
+                    id: 'scroll_btn_bottom', 
+                    onTap: (){
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("Клікнуто в самому низу!"))
+                      );
+                    }, 
+                    child: ElevatedButton(
+                      onPressed: null, 
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green, 
+                        disabledBackgroundColor: Colors.green,
+                        disabledForegroundColor: Colors.white
+                      ),
+                      child: const Text("ФІНІШНА КНОПКА (НИЗ)"),
+                    )
                   ),
                   const SizedBox(height: 50),
                 ],
