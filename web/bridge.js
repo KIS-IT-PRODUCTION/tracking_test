@@ -3,6 +3,7 @@ window.flutterBridge = {
     isTrackerLoaded: false,
     virtualScrollY: 0, 
 
+    // Ініціалізація
     initTracker: function() {
         if (this.isTrackerLoaded) return;
         
@@ -20,8 +21,82 @@ window.flutterBridge = {
         script.async = true;
         document.head.appendChild(script);
         this.isTrackerLoaded = true;
+        
+        console.log("[Bridge] Tracker initialized.");
     },
 
+    // ==========================================
+    // === ЛОГІКА ВІДПРАВКИ ДАНИХ (НОВЕ) ===
+    // ==========================================
+    
+    // Викликається Flutter-ом при зміні сторінки
+    handleNavigation: function(prevPageName, newPageName) {
+        console.log(`[Bridge] Navigation: ${prevPageName} -> ${newPageName}`);
+
+        // 1. Якщо ми йдемо з якоїсь сторінки (не перший запуск) -> зберігаємо і відправляємо її дані
+        if (prevPageName && prevPageName !== 'null') {
+            this._commitAndSend(prevPageName);
+        }
+
+        // 2. Повідомляємо трекер про нову URL (для віртуальної навігації)
+        this.triggerUrlChange(newPageName);
+        
+        // 3. Очищаємо старі інпути (опціонально, щоб трекер не плутав поля з різних сторінок)
+        // this._clearElements(); 
+    },
+
+    _commitAndSend: function(pageName) {
+        // КРОК 1: Отримати дані від трекера
+        // ВАЖЛИВО: Тут треба викликати реальний метод вашого трекера.
+        // Наприклад: const data = window.someTracker.getData();
+        // Поки що емулюємо збір даних, ґрунтуючись на тому, що ми ввели
+        const data = this._mockCollectData(); 
+
+        if (!data) {
+            console.log("[Bridge] No data to send.");
+            return;
+        }
+
+        console.log(`[Bridge] Saving data for ${pageName} to LocalStorage...`);
+
+        // КРОК 2: Зберегти в LocalStorage (як вимагали)
+        const lsKey = 'tracker_data_pending';
+        localStorage.setItem(lsKey, JSON.stringify({
+            page: pageName,
+            timestamp: Date.now(),
+            payload: data
+        }));
+
+        // КРОК 3: Відправка (емуляція Fetch)
+        console.log(`%c[Network] Sending Data for ${pageName}...`, "color: green; font-weight: bold; font-size: 14px;");
+        console.log("PAYLOAD:", data);
+
+        // Тут має бути реальний fetch
+        // fetch('/api/track', { method: 'POST', body: JSON.stringify(data) }).then(...)
+        
+        // Після успішної відправки можна очистити LS, але поки залишимо, як буфер
+        // localStorage.removeItem(lsKey);
+        
+        // КРОК 4: Скидання трекера (щоб дані не дублювалися на новій сторінці)
+        // window.someTracker.reset(); 
+    },
+
+    // Функція-заглушка для збору даних (замініть на реальну логіку трекера)
+    _mockCollectData: function() {
+        // Просто збираємо ID елементів, з якими взаємодіяли
+        const activeIds = Object.keys(this.elements);
+        if (activeIds.length === 0) return null;
+        
+        return {
+            event: "page_data_collected",
+            inputs_interacted: activeIds,
+            // Тут буде реальний JSON від трекера
+            fake_telemetry: "mouse_moves_and_clicks_data" 
+        };
+    },
+
+    // ... (Решта функцій без змін: triggerScroll, triggerClick і т.д.) ...
+    
     triggerScroll: function(pixels) {
         this.virtualScrollY = pixels;
         if (document.body.scrollHeight < pixels + window.innerHeight) {
@@ -32,6 +107,8 @@ window.flutterBridge = {
 
     triggerUrlChange: function(newUrl) {
         this.virtualScrollY = 0;
+        // Емулюємо зміну історії
+        history.pushState({}, "", newUrl === '/' ? '/' : `/${newUrl}`);
         window.dispatchEvent(new Event('popstate'));
         window.dispatchEvent(new Event('hashchange'));
     },
@@ -45,26 +122,16 @@ window.flutterBridge = {
         el.dispatchEvent(new MouseEvent('click', opts));
     },
 
-    // ==========================================
-    // === ГОЛОВНЕ ВИПРАВЛЕННЯ ДЛЯ ПОЛЯ "a" ===
-    // ==========================================
     setFocus: function(id, hasFocus) {
         const el = this._getOrCreateElement(id, 'input');
-        
         if (hasFocus) {
-            // 1. ЕМУЛЯЦІЯ ФІЗИЧНОГО КЛІКУ (Щоб трекер повірив)
-            // Трекери чекають mousedown перед фокусом
             const mouseOpts = { bubbles: true, cancelable: true, view: window };
             el.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
             el.dispatchEvent(new MouseEvent('mouseup', mouseOpts));
             el.dispatchEvent(new MouseEvent('click', mouseOpts));
-
-            // 2. ЕМУЛЯЦІЯ ФОКУСУ
-            // focus - не спливає, focusin - спливає (важливо для трекера)
             el.dispatchEvent(new FocusEvent('focus', { bubbles: false, cancelable: true, view: window }));
             el.dispatchEvent(new FocusEvent('focusin', { bubbles: true, cancelable: true, view: window }));
         } else {
-            // ДЕАКТИВАЦІЯ
             el.dispatchEvent(new Event('change', { bubbles: true })); 
             el.dispatchEvent(new FocusEvent('blur', { bubbles: false, cancelable: true, view: window }));
             el.dispatchEvent(new FocusEvent('focusout', { bubbles: true, cancelable: true, view: window }));
@@ -74,27 +141,11 @@ window.flutterBridge = {
     typeChar: function(id, text, char, start, end) {
         const el = this._getOrCreateElement(id, 'input');
         el.value = text;
-        
-        if (typeof start === 'number') {
-            try { el.setSelectionRange(start, end); } catch(e){}
-        }
-
-        const keyOpts = { 
-            key: char, 
-            code: `Key${char.toUpperCase()}`, 
-            bubbles: true, 
-            cancelable: true, 
-            view: window 
-        };
-        
+        if (typeof start === 'number') try { el.setSelectionRange(start, end); } catch(e){}
+        const keyOpts = { key: char, code: `Key${char.toUpperCase()}`, bubbles: true, cancelable: true, view: window };
         el.dispatchEvent(new KeyboardEvent('keydown', keyOpts));
         el.dispatchEvent(new KeyboardEvent('keypress', keyOpts));
-        el.dispatchEvent(new InputEvent('input', { 
-            bubbles: true, 
-            inputType: 'insertText',
-            data: char,
-            view: window
-        }));
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: char, view: window }));
         el.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
     },
 
@@ -102,16 +153,9 @@ window.flutterBridge = {
         const el = this._getOrCreateElement(id, 'input');
         el.value = text;
         try { el.setSelectionRange(start, end); } catch(e){}
-
         const bsOpts = { key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true, cancelable: true, view: window };
-
         el.dispatchEvent(new KeyboardEvent('keydown', bsOpts));
-        el.dispatchEvent(new InputEvent('input', { 
-            bubbles: true, 
-            inputType: 'deleteContentBackward',
-            data: null,
-            view: window
-        }));
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null, view: window }));
         el.dispatchEvent(new KeyboardEvent('keyup', bsOpts));
     },
 
@@ -122,15 +166,12 @@ window.flutterBridge = {
             el = document.createElement(type);
             el.id = id;
             el.setAttribute('data-ts1-id', id); 
-            // Використовуємо pointer-events: auto для JS подій, але ховаємо візуально
             el.style.position = 'fixed';
             el.style.opacity = '0.01'; 
             el.style.zIndex = '-1'; 
             el.style.top = '0';
             el.style.left = '0';
-            // Важливо: дозволяємо події, але елемент під низом
             el.style.pointerEvents = 'auto'; 
-            
             document.body.appendChild(el);
             this.elements[id] = el;
         }

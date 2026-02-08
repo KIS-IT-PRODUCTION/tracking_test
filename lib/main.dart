@@ -7,7 +7,8 @@ import 'dart:async';
 const String _viewTypeDiv = 'tracked-div-element';
 const String _viewTypeInput = 'tracked-input-element';
 
-final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
+// Створюємо глобальний обсервер
+final TrackingNavigationObserver routeObserver = TrackingNavigationObserver();
 
 void main() {
   initWebTracking();
@@ -39,21 +40,39 @@ void _callJs(String method, List<dynamic> args) {
   }
 }
 
-// --- NAVIGATION ---
+// --- ОНОВЛЕНИЙ NAVIGATION OBSERVER ---
 class TrackingNavigationObserver extends RouteObserver<ModalRoute<dynamic>> {
+  
+  // Викликається, коли ми переходимо НА нову сторінку (Push)
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
     super.didPush(route, previousRoute);
-    if (route.settings.name != null) _callJs('triggerUrlChange', [route.settings.name]);
+    _handleTransition(previousRoute, route);
   }
+
+  // Викликається, коли ми повертаємось НАЗАД (Pop)
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
     super.didPop(route, previousRoute);
-    if (previousRoute?.settings.name != null) _callJs('triggerUrlChange', [previousRoute!.settings.name]);
+    // При Pop: route - це та, що закривається, previousRoute - та, куди повертаємось
+    _handleTransition(route, previousRoute);
+  }
+
+  void _handleTransition(Route<dynamic>? from, Route<dynamic>? to) {
+    String? fromName = from?.settings.name;
+    String? toName = to?.settings.name;
+
+    // Якщо ми тільки запустили додаток, 'from' може бути null
+    fromName ??= 'null';
+    toName ??= 'unknown';
+
+    // Викликаємо JS функцію, яка збереже дані 'from' і запустить 'to'
+    _callJs('handleNavigation', [fromName, toName]);
   }
 }
 
-// --- BUTTON ---
+// --- РЕШТА КОДУ (КНОПКИ ТА ІНПУТИ) БЕЗ ЗМІН ---
+
 class WebTrackedBtn extends StatelessWidget {
   final String id;
   final Widget child;
@@ -83,7 +102,6 @@ class WebTrackedBtn extends StatelessWidget {
   }
 }
 
-// --- INPUT (CORRECT DATA SENDING) ---
 class WebTrackedInput extends StatefulWidget {
   final String id;
   final TextEditingController controller;
@@ -98,7 +116,6 @@ class WebTrackedInput extends StatefulWidget {
 class _WebTrackedInputState extends State<WebTrackedInput> {
   final FocusNode _focusNode = FocusNode();
   String _lastText = "";
-  // Додаємо трекінг стану фокусу, щоб уникнути дублікатів
   bool _wasFocused = false; 
 
   @override
@@ -118,7 +135,6 @@ class _WebTrackedInputState extends State<WebTrackedInput> {
   }
 
   void _onFocusChanged() {
-    // Відправляємо подію тільки якщо стан реально змінився
     if (_focusNode.hasFocus != _wasFocused) {
       _wasFocused = _focusNode.hasFocus;
       _callJs('setFocus', [widget.id, _wasFocused]);
@@ -157,7 +173,6 @@ class _WebTrackedInputState extends State<WebTrackedInput> {
           focusNode: _focusNode, 
           decoration: InputDecoration(labelText: widget.label, border: const OutlineInputBorder()),
           onTap: () {
-            // Гарантуємо, що фокус встановлено
             if (!_focusNode.hasFocus) {
                FocusScope.of(context).requestFocus(_focusNode);
             }
@@ -168,7 +183,6 @@ class _WebTrackedInputState extends State<WebTrackedInput> {
   }
 }
 
-// --- SCROLL TRACKER ---
 class WebScrollTracker extends StatefulWidget {
   final Widget child;
   const WebScrollTracker({super.key, required this.child});
@@ -200,17 +214,16 @@ class _WebScrollTrackerState extends State<WebScrollTracker> {
   }
 }
 
-// --- APP SHELL ---
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Tracking Final Fix',
+      title: 'Tracking Final',
       theme: ThemeData(primarySwatch: Colors.blue),
       initialRoute: '/',
-      navigatorObservers: [TrackingNavigationObserver()], 
+      navigatorObservers: [routeObserver], // Підключили наш Observer
       routes: {
         '/': (context) => const TestPage(),
         '/finish': (context) => const FinishPage(),
@@ -218,6 +231,7 @@ class MyApp extends StatelessWidget {
     );
   }
 }
+
 class TestPage extends StatefulWidget {
   const TestPage({super.key});
 
@@ -242,20 +256,13 @@ class _TestPageState extends State<TestPage> {
                 children: [
                   const SizedBox(height: 40),
                   const Icon(Icons.login, size: 80, color: Colors.blue),
-                  
-                  WebTrackedInput(
-                    id: 'login_input_field', 
-                    label: 'Логін', 
-                    controller: _loginController
-                  ),
-                  
+                  WebTrackedInput(id: 'login_input_field', label: 'Логін', controller: _loginController),
                   const SizedBox(height: 20),
-                  
                   WebTrackedBtn(
                     id: 'login_btn_top', 
                     onTap: () => Navigator.pushNamed(context, '/finish'),
                     child: ElevatedButton(
-                      onPressed: null, // null, бо обробляємо через WebTrackedBtn
+                      onPressed: null, 
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.blue,
                         disabledBackgroundColor: Colors.blue,
@@ -265,15 +272,12 @@ class _TestPageState extends State<TestPage> {
                       child: const Text("Увійти"),
                     ),
                   ),
-
                   const SizedBox(height: 50),
-                  const Text("Починаємо скролити вниз...", style: TextStyle(color: Colors.grey)),
+                  const Text("Скрольте вниз...", style: TextStyle(color: Colors.grey)),
                   const SizedBox(height: 20),
-
-                  // --- ГЕНЕРАТОР КОНТЕНТУ ДЛЯ СКРОЛУ (50 блоків) ---
-                  ...List.generate(50, (index) {
+                  ...List.generate(30, (index) {
                     return Container(
-                      height: 100, // Кожен блок 100 пікселів
+                      height: 100, 
                       margin: const EdgeInsets.only(bottom: 10),
                       width: double.infinity,
                       decoration: BoxDecoration(
@@ -282,31 +286,16 @@ class _TestPageState extends State<TestPage> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       alignment: Alignment.center,
-                      child: Text(
-                        "Тестовий блок контенту #$index\n(Скрол: ${(index + 1) * 100} px)",
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey[600]),
-                      ),
+                      child: Text("Блок #$index\n(${(index + 1) * 100} px)", textAlign: TextAlign.center),
                     );
                   }),
-
-                  const SizedBox(height: 30),
-                  
                   WebTrackedBtn(
                     id: 'scroll_btn_bottom', 
-                    onTap: (){
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("Клікнуто в самому низу!"))
-                      );
-                    }, 
+                    onTap: (){}, 
                     child: ElevatedButton(
                       onPressed: null, 
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green, 
-                        disabledBackgroundColor: Colors.green,
-                        disabledForegroundColor: Colors.white
-                      ),
-                      child: const Text("ФІНІШНА КНОПКА (НИЗ)"),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                      child: const Text("ФІНІШ (НИЗ)"),
                     )
                   ),
                   const SizedBox(height: 50),
@@ -334,12 +323,12 @@ class FinishPage extends StatelessWidget {
           children: [
             const Icon(Icons.check_circle, size: 100, color: Colors.green),
             const SizedBox(height: 20),
-            const Text("Ви успішно увійшли!", style: TextStyle(fontSize: 24)),
+            const Text("Сторінка 2: Дані з 1-ї відправлені!", style: TextStyle(fontSize: 18)),
             const SizedBox(height: 30),
             WebTrackedBtn(
               id: 'back_btn',
               onTap: () => Navigator.pop(context),
-              child: ElevatedButton(onPressed: null, child: const Text("Назад")),
+              child: ElevatedButton(onPressed: null, child: const Text("Назад (Перевірка Pop)")),
             ),
           ],
         ),
