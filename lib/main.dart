@@ -85,16 +85,27 @@ class WebTrackedBtn extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTapUp: (details) {
-        _callJs('triggerClick', [id, details.globalPosition.dx.toInt(), details.globalPosition.dy.toInt()]);
+        // 1. Спочатку відправляємо клік у JS (це відбувається миттєво)
+        _callJs('triggerClick', [
+          id, 
+          details.globalPosition.dx.toInt(), 
+          details.globalPosition.dy.toInt()
+        ]);
+        
+        // 2. ОДРАЗУ виконуємо дію Flutter (навігацію)
+        // Прибираємо Future.delayed, бо воно викликає краш при швидких переходах
         if (onTap != null) {
-          Future.delayed(const Duration(milliseconds: 100), () {
-            onTap!();
-          });
+          onTap!(); 
         }
       },
       child: Stack(
         children: [
-          Positioned.fill(child: Opacity(opacity: 0, child: HtmlElementView(viewType: _viewTypeDiv, creationParams: {'id': id}))),
+          Positioned.fill(
+            child: Opacity(
+              opacity: 0, 
+              child: HtmlElementView(viewType: _viewTypeDiv, creationParams: {'id': id})
+            )
+          ),
           child,
         ],
       ),

@@ -3,10 +3,14 @@ window.flutterBridge = {
     isTrackerLoaded: false,
     virtualScrollY: 0, 
 
-    // Ініціалізація
     initTracker: function() {
         if (this.isTrackerLoaded) return;
         
+        // --- ВИПРАВЛЕННЯ №2: Очистка "сміття" при старті ---
+        // Щоб старі дані з минулих тестів не відправлялися одразу при оновленні сторінки
+        localStorage.removeItem('tracker_data_pending');
+        console.log("[Bridge] LocalStorage cleared for fresh start.");
+
         try {
             const getScroll = () => this.virtualScrollY;
             Object.defineProperty(window, 'scrollY', { get: getScroll, configurable: true });
@@ -16,87 +20,76 @@ window.flutterBridge = {
         this._ensureHiddenInput('ts1-client-id', '123');
         const baseEl = document.querySelector('base');
         const baseUrl = baseEl ? baseEl.href : (window.location.origin + '/');
+        
+        // Додаємо сам скрипт трекера
         const script = document.createElement('script');
-        script.src = baseUrl + 'tracker.js';
+        script.src = baseUrl + 'tracker.js'; // Переконайтесь, що файл tracker.js лежить поруч з index.html
         script.async = true;
         document.head.appendChild(script);
-        this.isTrackerLoaded = true;
         
+        this.isTrackerLoaded = true;
         console.log("[Bridge] Tracker initialized.");
     },
 
     // ==========================================
-    // === ЛОГІКА ВІДПРАВКИ ДАНИХ (НОВЕ) ===
+    // === ГОЛОВНА ЛОГІКА ПЕРЕХОДУ ===
     // ==========================================
-    
-    // Викликається Flutter-ом при зміні сторінки
     handleNavigation: function(prevPageName, newPageName) {
         console.log(`[Bridge] Navigation: ${prevPageName} -> ${newPageName}`);
 
-        // 1. Якщо ми йдемо з якоїсь сторінки (не перший запуск) -> зберігаємо і відправляємо її дані
+        // Якщо це не перший запуск (ми йдемо зі старої сторінки)
         if (prevPageName && prevPageName !== 'null') {
+            
+            // 1. ПРИМУСОВА ВІДПРАВКА (Fix Issue #4)
+            // Ми емулюємо подію visibilitychange, ніби юзер пішов зі сторінки.
+            // Більшість трекерів слухають це і відправляють дані МИТТЄВО.
+            this._simulateVisibilityChange('hidden');
+            
+            // 2. Викликаємо нашу логіку збереження (на всяк випадок)
             this._commitAndSend(prevPageName);
         }
 
-        // 2. Повідомляємо трекер про нову URL (для віртуальної навігації)
+        // 3. Змінюємо URL (віртуально)
         this.triggerUrlChange(newPageName);
         
-        // 3. Очищаємо старі інпути (опціонально, щоб трекер не плутав поля з різних сторінок)
-        // this._clearElements(); 
+        // 4. "Повертаємо" користувача на сторінку (для нової сесії)
+        if (prevPageName && prevPageName !== 'null') {
+            setTimeout(() => {
+                this._simulateVisibilityChange('visible');
+            }, 50);
+        }
+    },
+
+    _simulateVisibilityChange: function(state) {
+        // state = 'visible' або 'hidden'
+        Object.defineProperty(document, 'visibilityState', { value: state, writable: true });
+        Object.defineProperty(document, 'hidden', { value: state === 'hidden', writable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        console.log(`[Bridge] Emulated visibility change to: ${state}`);
     },
 
     _commitAndSend: function(pageName) {
-        // КРОК 1: Отримати дані від трекера
-        // ВАЖЛИВО: Тут треба викликати реальний метод вашого трекера.
-        // Наприклад: const data = window.someTracker.getData();
-        // Поки що емулюємо збір даних, ґрунтуючись на тому, що ми ввели
+        // Тут збираємо дані
         const data = this._mockCollectData(); 
-
-        if (!data) {
-            console.log("[Bridge] No data to send.");
-            return;
-        }
-
-        console.log(`[Bridge] Saving data for ${pageName} to LocalStorage...`);
-
-        // КРОК 2: Зберегти в LocalStorage (як вимагали)
-        const lsKey = 'tracker_data_pending';
-        localStorage.setItem(lsKey, JSON.stringify({
-            page: pageName,
-            timestamp: Date.now(),
-            payload: data
-        }));
-
-        // КРОК 3: Відправка (емуляція Fetch)
-        console.log(`%c[Network] Sending Data for ${pageName}...`, "color: green; font-weight: bold; font-size: 14px;");
-        console.log("PAYLOAD:", data);
-
-        // Тут має бути реальний fetch
-        // fetch('/api/track', { method: 'POST', body: JSON.stringify(data) }).then(...)
         
-        // Після успішної відправки можна очистити LS, але поки залишимо, як буфер
-        // localStorage.removeItem(lsKey);
+        if (!data) return;
+
+        console.log(`%c[Network] FORCED SENDING DATA for ${pageName}...`, "color: red; font-weight: bold; font-size: 16px;");
         
-        // КРОК 4: Скидання трекера (щоб дані не дублювалися на новій сторінці)
-        // window.someTracker.reset(); 
+        // --- ВАЖЛИВО ДЛЯ КЛІЄНТА ---
+        // Якщо у трекера є метод типу tracker.flush() або tracker.sendNow() - викличте його тут!
+        // Наприклад:
+        // if (window.someTracker && window.someTracker.flush) {
+        //     window.someTracker.flush();
+        // }
     },
 
-    // Функція-заглушка для збору даних (замініть на реальну логіку трекера)
     _mockCollectData: function() {
-        // Просто збираємо ID елементів, з якими взаємодіяли
         const activeIds = Object.keys(this.elements);
         if (activeIds.length === 0) return null;
-        
-        return {
-            event: "page_data_collected",
-            inputs_interacted: activeIds,
-            // Тут буде реальний JSON від трекера
-            fake_telemetry: "mouse_moves_and_clicks_data" 
-        };
+        return { event: "page_data", inputs: activeIds };
     },
 
-    // ... (Решта функцій без змін: triggerScroll, triggerClick і т.д.) ...
-    
     triggerScroll: function(pixels) {
         this.virtualScrollY = pixels;
         if (document.body.scrollHeight < pixels + window.innerHeight) {
@@ -107,10 +100,14 @@ window.flutterBridge = {
 
     triggerUrlChange: function(newUrl) {
         this.virtualScrollY = 0;
-        // Емулюємо зміну історії
-        history.pushState({}, "", newUrl === '/' ? '/' : `/${newUrl}`);
+        const cleanUrl = newUrl.startsWith('/') ? newUrl : `/${newUrl}`;
+        history.pushState({}, "", cleanUrl);
+        
+        // Тригеримо події, щоб трекер помітив зміну URL
         window.dispatchEvent(new Event('popstate'));
         window.dispatchEvent(new Event('hashchange'));
+        // Деякі трекери слухають locationchange (нестандартна подія, але буває)
+        window.dispatchEvent(new Event('locationchange')); 
     },
 
     triggerClick: function(id, x, y) {
@@ -158,6 +155,13 @@ window.flutterBridge = {
         el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null, view: window }));
         el.dispatchEvent(new KeyboardEvent('keyup', bsOpts));
     },
+    
+    // Додана функція оновлення значення (для надійності)
+    updateInput: function(id, text, isBackspace) {
+         const el = this._getOrCreateElement(id, 'input');
+         el.value = text;
+         el.dispatchEvent(new InputEvent('input', { bubbles: true, view: window }));
+    },
 
     _getOrCreateElement: function(id, type) {
         let el = document.getElementById(id);
@@ -176,6 +180,11 @@ window.flutterBridge = {
             this.elements[id] = el;
         }
         return el;
+    },
+    
+    registerElement: function(id) {
+        // Просто створюємо елемент наперед
+        this._getOrCreateElement(id, 'div');
     },
 
     _ensureHiddenInput: function(id, value) {
