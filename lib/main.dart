@@ -1,60 +1,77 @@
 import 'package:flutter/material.dart';
 import 'dart:html' as html;
-import 'dart:ui_web' as ui_web;
+import 'dart:ui_web' as ui_web; // Для реєстрації view factory
 import 'dart:js_util' as js_util;
 import 'dart:async';
 
+// Константи для типів HTML елементів
 const String _viewTypeDiv = 'tracked-div-element';
 const String _viewTypeInput = 'tracked-input-element';
 
-// Створюємо глобальний обсервер
+// Глобальний обсервер навігації
 final TrackingNavigationObserver routeObserver = TrackingNavigationObserver();
 
 void main() {
+  // Ініціалізуємо трекінг перед запуском
   initWebTracking();
   runApp(const MyApp());
 }
 
+// --- ІНІЦІАЛІЗАЦІЯ ---
 void initWebTracking() {
+  // 1. Реєструємо DIV (для кнопок)
   ui_web.platformViewRegistry.registerViewFactory(_viewTypeDiv, (int viewId, {Object? params}) {
-    return html.DivElement()..id = 'flutter-proxy-div-${(params as Map)['id']}'..style.display = 'none';
+    final id = (params as Map)['id'];
+    // Реєструємо елемент в JS "на майбутнє"
+    Future.delayed(Duration.zero, () => _callJs('registerElement', [id]));
+    
+    return html.DivElement()
+      ..id = 'proxy-div-$id'
+      ..style.width = '100%'
+      ..style.height = '100%';
   });
 
+  // 2. Реєструємо INPUT (для текстових полів)
   ui_web.platformViewRegistry.registerViewFactory(_viewTypeInput, (int viewId, {Object? params}) {
-    return html.InputElement()..id = 'flutter-proxy-input-${(params as Map)['id']}'..type = 'hidden';
+    final id = (params as Map)['id'];
+    Future.delayed(Duration.zero, () => _callJs('registerElement', [id]));
+    
+    return html.InputElement()
+      ..id = 'proxy-input-$id'
+      ..type = 'hidden'; // Прихований, бо ми малюємо свій TextField зверху
   });
 
-  Future.delayed(const Duration(seconds: 1), () {
+  // 3. Запускаємо логіку трекера з затримкою (щоб сторінка встигла прогрузитись)
+  Future.delayed(const Duration(milliseconds: 1000), () {
     _callJs('initTracker', []);
   });
 }
 
+// --- JS BRIDGE (БЕЗПЕЧНИЙ ВИКЛИК) ---
 void _callJs(String method, List<dynamic> args) {
   try {
     if (js_util.hasProperty(html.window, 'flutterBridge')) {
       final bridge = js_util.getProperty(html.window, 'flutterBridge');
       js_util.callMethod(bridge, method, args);
+    } else {
+      print('JS Bridge not found yet (waiting...)');
     }
   } catch (e) {
-    print('JS Bridge Error: $e');
+    print('JS Bridge Error calling $method: $e');
   }
 }
 
-// --- ОНОВЛЕНИЙ NAVIGATION OBSERVER ---
+// --- NAVIGATION OBSERVER ---
 class TrackingNavigationObserver extends RouteObserver<ModalRoute<dynamic>> {
-  
-  // Викликається, коли ми переходимо НА нову сторінку (Push)
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
     super.didPush(route, previousRoute);
     _handleTransition(previousRoute, route);
   }
 
-  // Викликається, коли ми повертаємось НАЗАД (Pop)
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
     super.didPop(route, previousRoute);
-    // При Pop: route - це та, що закривається, previousRoute - та, куди повертаємось
     _handleTransition(route, previousRoute);
   }
 
@@ -62,16 +79,15 @@ class TrackingNavigationObserver extends RouteObserver<ModalRoute<dynamic>> {
     String? fromName = from?.settings.name;
     String? toName = to?.settings.name;
 
-    // Якщо ми тільки запустили додаток, 'from' може бути null
     fromName ??= 'null';
     toName ??= 'unknown';
 
-    // Викликаємо JS функцію, яка збереже дані 'from' і запустить 'to'
+    // Повідомляємо JS про зміну сторінки
     _callJs('handleNavigation', [fromName, toName]);
   }
 }
 
-// --- РЕШТА КОДУ (КНОПКИ ТА ІНПУТИ) БЕЗ ЗМІН ---
+// --- ВІДЖЕТИ ---
 
 class WebTrackedBtn extends StatelessWidget {
   final String id;
@@ -85,15 +101,14 @@ class WebTrackedBtn extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTapUp: (details) {
-        // 1. Спочатку відправляємо клік у JS (це відбувається миттєво)
+        // 1. Клік в JS
         _callJs('triggerClick', [
           id, 
           details.globalPosition.dx.toInt(), 
           details.globalPosition.dy.toInt()
         ]);
         
-        // 2. ОДРАЗУ виконуємо дію Flutter (навігацію)
-        // Прибираємо Future.delayed, бо воно викликає краш при швидких переходах
+        // 2. Клік у Flutter
         if (onTap != null) {
           onTap!(); 
         }
@@ -102,7 +117,7 @@ class WebTrackedBtn extends StatelessWidget {
         children: [
           Positioned.fill(
             child: Opacity(
-              opacity: 0, 
+              opacity: 0, // Невидимий, але існує в DOM
               child: HtmlElementView(viewType: _viewTypeDiv, creationParams: {'id': id})
             )
           ),
@@ -127,7 +142,6 @@ class WebTrackedInput extends StatefulWidget {
 class _WebTrackedInputState extends State<WebTrackedInput> {
   final FocusNode _focusNode = FocusNode();
   String _lastText = "";
-  bool _wasFocused = false; 
 
   @override
   void initState() {
@@ -146,31 +160,17 @@ class _WebTrackedInputState extends State<WebTrackedInput> {
   }
 
   void _onFocusChanged() {
-    if (_focusNode.hasFocus != _wasFocused) {
-      _wasFocused = _focusNode.hasFocus;
-      _callJs('setFocus', [widget.id, _wasFocused]);
-    }
+    _callJs('setFocus', [widget.id, _focusNode.hasFocus]);
   }
 
   void _onControllerChanged() {
     final text = widget.controller.text;
     if (text == _lastText) return; 
 
-    final selection = widget.controller.selection;
-    final start = selection.isValid ? selection.start : text.length;
-    final end = selection.isValid ? selection.end : text.length;
-
-    if (text.length < _lastText.length) {
-      _callJs('pressBackspace', [widget.id, text, start, end]);
-    } else {
-       String newChar = "";
-       if (text.isNotEmpty && start > 0) {
-          newChar = text.substring(start - 1, start);
-       } else if (text.isNotEmpty) {
-          newChar = text.substring(text.length - 1);
-       }
-       _callJs('typeChar', [widget.id, text, newChar, start, end]);
-    }
+    // Використовуємо універсальний метод оновлення (надійніше)
+    bool isBackspace = text.length < _lastText.length;
+    _callJs('updateInput', [widget.id, text, isBackspace]);
+    
     _lastText = text;
   }
 
@@ -178,16 +178,14 @@ class _WebTrackedInputState extends State<WebTrackedInput> {
   Widget build(BuildContext context) {
     return Stack(
       children: [
+        // Прихований HTML інпут для трекера
         SizedBox(height: 1, width: 1, child: HtmlElementView(viewType: _viewTypeInput, creationParams: {'id': widget.id})),
+        
+        // Реальний Flutter інпут
         TextField(
           controller: widget.controller, 
           focusNode: _focusNode, 
           decoration: InputDecoration(labelText: widget.label, border: const OutlineInputBorder()),
-          onTap: () {
-            if (!_focusNode.hasFocus) {
-               FocusScope.of(context).requestFocus(_focusNode);
-            }
-          },
         ),
       ],
     );
@@ -208,6 +206,7 @@ class _WebScrollTrackerState extends State<WebScrollTracker> {
   bool _handleScroll(ScrollNotification notification) {
     if (notification is ScrollUpdateNotification) {
       final now = DateTime.now().millisecondsSinceEpoch;
+      // Обмежуємо частоту подій (раз на 100мс)
       if (now - _lastEventTime > 100) {
         _lastEventTime = now;
         _callJs('triggerScroll', [notification.metrics.pixels.toInt()]);
@@ -225,6 +224,8 @@ class _WebScrollTrackerState extends State<WebScrollTracker> {
   }
 }
 
+// --- APP & PAGES ---
+
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -232,9 +233,10 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Tracking Final',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.blue),
       initialRoute: '/',
-      navigatorObservers: [routeObserver], // Підключили наш Observer
+      navigatorObservers: [routeObserver], // ПІДКЛЮЧЕННЯ OBSERVER
       routes: {
         '/': (context) => const TestPage(),
         '/finish': (context) => const FinishPage(),
@@ -256,7 +258,7 @@ class _TestPageState extends State<TestPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Крок 1: Вхід (Довга сторінка)")),
+      appBar: AppBar(title: const Text("Крок 1: Вхід")),
       body: WebScrollTracker(
         child: SingleChildScrollView(
           child: Center(
@@ -267,13 +269,16 @@ class _TestPageState extends State<TestPage> {
                 children: [
                   const SizedBox(height: 40),
                   const Icon(Icons.login, size: 80, color: Colors.blue),
+                  const SizedBox(height: 20),
+                  
                   WebTrackedInput(id: 'login_input_field', label: 'Логін', controller: _loginController),
+                  
                   const SizedBox(height: 20),
                   WebTrackedBtn(
                     id: 'login_btn_top', 
                     onTap: () => Navigator.pushNamed(context, '/finish'),
                     child: ElevatedButton(
-                      onPressed: null, 
+                      onPressed: null, // Вимкнено, бо WebTrackedBtn обробляє клік
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.blue,
                         disabledBackgroundColor: Colors.blue,
@@ -283,33 +288,20 @@ class _TestPageState extends State<TestPage> {
                       child: const Text("Увійти"),
                     ),
                   ),
+                  
                   const SizedBox(height: 50),
-                  const Text("Скрольте вниз...", style: TextStyle(color: Colors.grey)),
+                  const Text("Скрольте вниз для тесту...", style: TextStyle(color: Colors.grey)),
                   const SizedBox(height: 20),
-                  ...List.generate(30, (index) {
+                  
+                  ...List.generate(10, (index) {
                     return Container(
                       height: 100, 
                       margin: const EdgeInsets.only(bottom: 10),
-                      width: double.infinity,
-                      decoration: BoxDecoration(
-                        color: index % 2 == 0 ? Colors.blue[50] : Colors.grey[100],
-                        border: Border.all(color: Colors.blue.withOpacity(0.2)),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
+                      color: Colors.grey[200],
                       alignment: Alignment.center,
-                      child: Text("Блок #$index\n(${(index + 1) * 100} px)", textAlign: TextAlign.center),
+                      child: Text("Блок #$index"),
                     );
                   }),
-                  WebTrackedBtn(
-                    id: 'scroll_btn_bottom', 
-                    onTap: (){}, 
-                    child: ElevatedButton(
-                      onPressed: null, 
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                      child: const Text("ФІНІШ (НИЗ)"),
-                    )
-                  ),
-                  const SizedBox(height: 50),
                 ],
               ),
             ),
@@ -334,12 +326,15 @@ class FinishPage extends StatelessWidget {
           children: [
             const Icon(Icons.check_circle, size: 100, color: Colors.green),
             const SizedBox(height: 20),
-            const Text("Сторінка 2: Дані з 1-ї відправлені!", style: TextStyle(fontSize: 18)),
+            const Text("Дані відправлені!", style: TextStyle(fontSize: 18)),
             const SizedBox(height: 30),
             WebTrackedBtn(
               id: 'back_btn',
               onTap: () => Navigator.pop(context),
-              child: ElevatedButton(onPressed: null, child: const Text("Назад (Перевірка Pop)")),
+              child: ElevatedButton(
+                  onPressed: null, 
+                  child: const Text("Назад")
+              ),
             ),
           ],
         ),

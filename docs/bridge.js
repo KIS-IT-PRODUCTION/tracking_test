@@ -6,8 +6,7 @@ window.flutterBridge = {
     initTracker: function() {
         if (this.isTrackerLoaded) return;
         
-        // --- ВИПРАВЛЕННЯ №2: Очистка "сміття" при старті ---
-        // Щоб старі дані з минулих тестів не відправлялися одразу при оновленні сторінки
+        // Очистка для чистого старту
         localStorage.removeItem('tracker_data_pending');
         console.log("[Bridge] LocalStorage cleared for fresh start.");
 
@@ -19,11 +18,16 @@ window.flutterBridge = {
 
         this._ensureHiddenInput('ts1-client-id', '123');
         const baseEl = document.querySelector('base');
-        const baseUrl = baseEl ? baseEl.href : (window.location.origin + '/');
         
-        // Додаємо сам скрипт трекера
+        // ВАЖЛИВО: Визначаємо правильний шлях для скрипта трекера
+        // Якщо base href="./", то беремо поточний location
+        let baseUrl = baseEl ? baseEl.href : (window.location.origin + '/');
+        if (baseUrl.includes('index.html')) {
+            baseUrl = baseUrl.replace('index.html', '');
+        }
+
         const script = document.createElement('script');
-        script.src = baseUrl + 'tracker.js'; // Переконайтесь, що файл tracker.js лежить поруч з index.html
+        script.src = baseUrl + 'tracker.js'; 
         script.async = true;
         document.head.appendChild(script);
         
@@ -31,28 +35,17 @@ window.flutterBridge = {
         console.log("[Bridge] Tracker initialized.");
     },
 
-    // ==========================================
-    // === ГОЛОВНА ЛОГІКА ПЕРЕХОДУ ===
-    // ==========================================
     handleNavigation: function(prevPageName, newPageName) {
         console.log(`[Bridge] Navigation: ${prevPageName} -> ${newPageName}`);
 
-        // Якщо це не перший запуск (ми йдемо зі старої сторінки)
         if (prevPageName && prevPageName !== 'null') {
-            
-            // 1. ПРИМУСОВА ВІДПРАВКА (Fix Issue #4)
-            // Ми емулюємо подію visibilitychange, ніби юзер пішов зі сторінки.
-            // Більшість трекерів слухають це і відправляють дані МИТТЄВО.
+            // Емуляція виходу для миттєвої відправки даних
             this._simulateVisibilityChange('hidden');
-            
-            // 2. Викликаємо нашу логіку збереження (на всяк випадок)
             this._commitAndSend(prevPageName);
         }
 
-        // 3. Змінюємо URL (віртуально)
         this.triggerUrlChange(newPageName);
         
-        // 4. "Повертаємо" користувача на сторінку (для нової сесії)
         if (prevPageName && prevPageName !== 'null') {
             setTimeout(() => {
                 this._simulateVisibilityChange('visible');
@@ -61,27 +54,15 @@ window.flutterBridge = {
     },
 
     _simulateVisibilityChange: function(state) {
-        // state = 'visible' або 'hidden'
         Object.defineProperty(document, 'visibilityState', { value: state, writable: true });
         Object.defineProperty(document, 'hidden', { value: state === 'hidden', writable: true });
         document.dispatchEvent(new Event('visibilitychange'));
-        console.log(`[Bridge] Emulated visibility change to: ${state}`);
     },
 
     _commitAndSend: function(pageName) {
-        // Тут збираємо дані
         const data = this._mockCollectData(); 
-        
         if (!data) return;
-
         console.log(`%c[Network] FORCED SENDING DATA for ${pageName}...`, "color: red; font-weight: bold; font-size: 16px;");
-        
-        // --- ВАЖЛИВО ДЛЯ КЛІЄНТА ---
-        // Якщо у трекера є метод типу tracker.flush() або tracker.sendNow() - викличте його тут!
-        // Наприклад:
-        // if (window.someTracker && window.someTracker.flush) {
-        //     window.someTracker.flush();
-        // }
     },
 
     _mockCollectData: function() {
@@ -100,13 +81,16 @@ window.flutterBridge = {
 
     triggerUrlChange: function(newUrl) {
         this.virtualScrollY = 0;
-        const cleanUrl = newUrl.startsWith('/') ? newUrl : `/${newUrl}`;
-        history.pushState({}, "", cleanUrl);
         
-        // Тригеримо події, щоб трекер помітив зміну URL
+        // === ВИПРАВЛЕННЯ КРАШУ ===
+        // Ми НЕ міняємо URL примусово, бо Flutter це вже зробив.
+        // Якщо ми зробимо це тут, станеться конфлікт і сторінка перезавантажиться.
+        
+        // history.pushState({}, "", newUrl);  <-- ЦЕЙ РЯДОК ВБИВАВ ДОДАТОК
+        
+        // Але ми все одно кажемо трекеру, що "щось сталося"
         window.dispatchEvent(new Event('popstate'));
         window.dispatchEvent(new Event('hashchange'));
-        // Деякі трекери слухають locationchange (нестандартна подія, але буває)
         window.dispatchEvent(new Event('locationchange')); 
     },
 
@@ -156,7 +140,6 @@ window.flutterBridge = {
         el.dispatchEvent(new KeyboardEvent('keyup', bsOpts));
     },
     
-    // Додана функція оновлення значення (для надійності)
     updateInput: function(id, text, isBackspace) {
          const el = this._getOrCreateElement(id, 'input');
          el.value = text;
@@ -183,7 +166,6 @@ window.flutterBridge = {
     },
     
     registerElement: function(id) {
-        // Просто створюємо елемент наперед
         this._getOrCreateElement(id, 'div');
     },
 
