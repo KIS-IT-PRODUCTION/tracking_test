@@ -6,10 +6,10 @@ window.flutterBridge = {
     initTracker: function() {
         if (this.isTrackerLoaded) return;
         
-        // Очистка для чистого старту
+        console.log("[Bridge] Initializing Tracker...");
         localStorage.removeItem('tracker_data_pending');
-        console.log("[Bridge] LocalStorage cleared for fresh start.");
 
+        // Патч для скролу
         try {
             const getScroll = () => this.virtualScrollY;
             Object.defineProperty(window, 'scrollY', { get: getScroll, configurable: true });
@@ -17,36 +17,42 @@ window.flutterBridge = {
         } catch (e) {}
 
         this._ensureHiddenInput('ts1-client-id', '123');
-        const baseEl = document.querySelector('base');
-        
-        // ВАЖЛИВО: Визначаємо правильний шлях для скрипта трекера
-        // Якщо base href="./", то беремо поточний location
-        let baseUrl = baseEl ? baseEl.href : (window.location.origin + '/');
-        if (baseUrl.includes('index.html')) {
-            baseUrl = baseUrl.replace('index.html', '');
-        }
+
+        // === ВИПРАВЛЕННЯ ШЛЯХУ ===
+        // Ми беремо base href прямо з HTML, який ми виправили вище
+        const baseHref = document.querySelector('base') ? document.querySelector('base').href : '/tracking_test/';
+        const scriptUrl = baseHref + 'tracker.js';
+
+        console.log(`[Bridge] Loading tracker from: ${scriptUrl}`);
 
         const script = document.createElement('script');
-        script.src = baseUrl + 'tracker.js'; 
+        script.src = scriptUrl; 
         script.async = true;
+        
+        // Обробка помилок завантаження скрипта
+        script.onerror = () => console.error("[Bridge] Failed to load tracker.js! Check if file exists in web folder.");
+        script.onload = () => console.log("[Bridge] Tracker loaded successfully.");
+        
         document.head.appendChild(script);
         
         this.isTrackerLoaded = true;
-        console.log("[Bridge] Tracker initialized.");
     },
 
     handleNavigation: function(prevPageName, newPageName) {
+        // Захист від null/undefined
+        prevPageName = prevPageName || 'null';
+        newPageName = newPageName || '/';
+
         console.log(`[Bridge] Navigation: ${prevPageName} -> ${newPageName}`);
 
-        if (prevPageName && prevPageName !== 'null') {
-            // Емуляція виходу для миттєвої відправки даних
+        if (prevPageName !== 'null') {
             this._simulateVisibilityChange('hidden');
             this._commitAndSend(prevPageName);
         }
 
         this.triggerUrlChange(newPageName);
         
-        if (prevPageName && prevPageName !== 'null') {
+        if (prevPageName !== 'null') {
             setTimeout(() => {
                 this._simulateVisibilityChange('visible');
             }, 50);
@@ -54,43 +60,41 @@ window.flutterBridge = {
     },
 
     _simulateVisibilityChange: function(state) {
-        Object.defineProperty(document, 'visibilityState', { value: state, writable: true });
-        Object.defineProperty(document, 'hidden', { value: state === 'hidden', writable: true });
-        document.dispatchEvent(new Event('visibilitychange'));
+        // Безпечна зміна visibility
+        try {
+            Object.defineProperty(document, 'visibilityState', { value: state, writable: true });
+            Object.defineProperty(document, 'hidden', { value: state === 'hidden', writable: true });
+            document.dispatchEvent(new Event('visibilitychange'));
+        } catch (e) {
+            console.warn("[Bridge] Could not mock visibility:", e);
+        }
     },
 
     _commitAndSend: function(pageName) {
         const data = this._mockCollectData(); 
-        if (!data) return;
-        console.log(`%c[Network] FORCED SENDING DATA for ${pageName}...`, "color: red; font-weight: bold; font-size: 16px;");
+        if (data) {
+            console.log(`%c[Network] Sending data for ${pageName}`, "color: green");
+        }
     },
 
     _mockCollectData: function() {
         const activeIds = Object.keys(this.elements);
-        if (activeIds.length === 0) return null;
-        return { event: "page_data", inputs: activeIds };
+        return activeIds.length > 0 ? { event: "page_data", inputs: activeIds } : null;
     },
 
     triggerScroll: function(pixels) {
         this.virtualScrollY = pixels;
+        // Авто-розширення сторінки, щоб скрол працював коректно
         if (document.body.scrollHeight < pixels + window.innerHeight) {
-            document.body.style.minHeight = (pixels + window.innerHeight + 200) + 'px';
+            document.body.style.minHeight = (pixels + window.innerHeight + 100) + 'px';
         }
-        window.dispatchEvent(new Event('scroll', { bubbles: true }));
+        window.dispatchEvent(new Event('scroll'));
     },
 
     triggerUrlChange: function(newUrl) {
         this.virtualScrollY = 0;
-        
-        // === ВИПРАВЛЕННЯ КРАШУ ===
-        // Ми НЕ міняємо URL примусово, бо Flutter це вже зробив.
-        // Якщо ми зробимо це тут, станеться конфлікт і сторінка перезавантажиться.
-        
-        // history.pushState({}, "", newUrl);  <-- ЦЕЙ РЯДОК ВБИВАВ ДОДАТОК
-        
-        // Але ми все одно кажемо трекеру, що "щось сталося"
+        // Просто повідомляємо аналітику, не чіпаємо URL браузера
         window.dispatchEvent(new Event('popstate'));
-        window.dispatchEvent(new Event('hashchange'));
         window.dispatchEvent(new Event('locationchange')); 
     },
 
@@ -98,67 +102,40 @@ window.flutterBridge = {
         const el = this._getOrCreateElement(id, 'div');
         el.style.left = x + 'px'; el.style.top = y + 'px';
         const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
-        el.dispatchEvent(new MouseEvent('mousedown', opts));
-        el.dispatchEvent(new MouseEvent('mouseup', opts));
         el.dispatchEvent(new MouseEvent('click', opts));
     },
 
     setFocus: function(id, hasFocus) {
         const el = this._getOrCreateElement(id, 'input');
         if (hasFocus) {
-            const mouseOpts = { bubbles: true, cancelable: true, view: window };
-            el.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
-            el.dispatchEvent(new MouseEvent('mouseup', mouseOpts));
-            el.dispatchEvent(new MouseEvent('click', mouseOpts));
-            el.dispatchEvent(new FocusEvent('focus', { bubbles: false, cancelable: true, view: window }));
-            el.dispatchEvent(new FocusEvent('focusin', { bubbles: true, cancelable: true, view: window }));
+            el.focus();
+            el.dispatchEvent(new Event('focus', { bubbles: true }));
         } else {
-            el.dispatchEvent(new Event('change', { bubbles: true })); 
-            el.dispatchEvent(new FocusEvent('blur', { bubbles: false, cancelable: true, view: window }));
-            el.dispatchEvent(new FocusEvent('focusout', { bubbles: true, cancelable: true, view: window }));
+            el.blur();
+            el.dispatchEvent(new Event('blur', { bubbles: true }));
         }
     },
 
-    typeChar: function(id, text, char, start, end) {
-        const el = this._getOrCreateElement(id, 'input');
-        el.value = text;
-        if (typeof start === 'number') try { el.setSelectionRange(start, end); } catch(e){}
-        const keyOpts = { key: char, code: `Key${char.toUpperCase()}`, bubbles: true, cancelable: true, view: window };
-        el.dispatchEvent(new KeyboardEvent('keydown', keyOpts));
-        el.dispatchEvent(new KeyboardEvent('keypress', keyOpts));
-        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: char, view: window }));
-        el.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
-    },
-
-    pressBackspace: function(id, text, start, end) {
-        const el = this._getOrCreateElement(id, 'input');
-        el.value = text;
-        try { el.setSelectionRange(start, end); } catch(e){}
-        const bsOpts = { key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true, cancelable: true, view: window };
-        el.dispatchEvent(new KeyboardEvent('keydown', bsOpts));
-        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null, view: window }));
-        el.dispatchEvent(new KeyboardEvent('keyup', bsOpts));
-    },
-    
     updateInput: function(id, text, isBackspace) {
          const el = this._getOrCreateElement(id, 'input');
          el.value = text;
-         el.dispatchEvent(new InputEvent('input', { bubbles: true, view: window }));
+         el.dispatchEvent(new InputEvent('input', { bubbles: true }));
     },
 
     _getOrCreateElement: function(id, type) {
         let el = document.getElementById(id);
+        // Якщо тип елемента змінився (div -> input), перестворюємо
         if (el && el.tagName.toLowerCase() !== type) { el.remove(); el = null; }
+        
         if (!el) {
             el = document.createElement(type);
             el.id = id;
             el.setAttribute('data-ts1-id', id); 
+            // Робимо елемент прозорим, але фізично присутнім
             el.style.position = 'fixed';
             el.style.opacity = '0.01'; 
+            el.style.pointerEvents = 'none'; // Щоб не перекривав Flutter
             el.style.zIndex = '-1'; 
-            el.style.top = '0';
-            el.style.left = '0';
-            el.style.pointerEvents = 'auto'; 
             document.body.appendChild(el);
             this.elements[id] = el;
         }
