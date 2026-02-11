@@ -6,146 +6,204 @@ window.flutterBridge = {
     initTracker: function() {
         if (this.isTrackerLoaded) return;
         
-        console.log("[Bridge] Initializing Tracker...");
-        localStorage.removeItem('tracker_data_pending');
-
-        // Патч для скролу
+        console.log("[Bridge] Initializing tracking system...");
+        
         try {
-            const getScroll = () => this.virtualScrollY;
-            Object.defineProperty(window, 'scrollY', { get: getScroll, configurable: true });
-            Object.defineProperty(window, 'pageYOffset', { get: getScroll, configurable: true });
+            localStorage.removeItem('tracker_data_pending');
+            this._ensureHiddenInput('ts1-client-id', '123');
         } catch (e) {}
 
-        this._ensureHiddenInput('ts1-client-id', '123');
-
-        // === ВИПРАВЛЕННЯ ШЛЯХУ ===
-        // Ми беремо base href прямо з HTML, який ми виправили вище
-        const baseHref = document.querySelector('base') ? document.querySelector('base').href : '/tracking_test/';
-        const scriptUrl = baseHref + 'tracker.js';
-
-        console.log(`[Bridge] Loading tracker from: ${scriptUrl}`);
-
-        const script = document.createElement('script');
-        script.src = scriptUrl; 
-        script.async = true;
+        const baseEl = document.querySelector('base');
+        let baseUrl = baseEl ? baseEl.href : window.location.href;
+        if (baseUrl.includes('index.html')) baseUrl = baseUrl.replace('index.html', '');
+        if (!baseUrl.endsWith('/')) baseUrl += '/';
         
-        // Обробка помилок завантаження скрипта
-        script.onerror = () => console.error("[Bridge] Failed to load tracker.js! Check if file exists in web folder.");
-        script.onload = () => console.log("[Bridge] Tracker loaded successfully.");
-        
-        document.head.appendChild(script);
-        
-        this.isTrackerLoaded = true;
+        const trackerUrl = baseUrl + 'tracker.js';
+
+        console.log(`[Bridge] Loading tracker from: ${trackerUrl}`);
+
+        fetch(trackerUrl)
+            .then(response => response.text())
+            .then(originalCode => {
+                let patchedCode = originalCode
+                    .replace(/window\.scrollY/g, 'window.flutterBridge.virtualScrollY')
+                    .replace(/window\.pageYOffset/g, 'window.flutterBridge.virtualScrollY')
+                    .replace(/document\.documentElement\.scrollTop/g, '(window.flutterBridge.virtualScrollY || 0)')
+                    .replace(/document\.body\.scrollTop/g, '(window.flutterBridge.virtualScrollY || 0)');
+
+                const blob = new Blob([patchedCode], { type: 'text/javascript' });
+                const blobUrl = URL.createObjectURL(blob);
+                
+                const script = document.createElement('script');
+                script.src = blobUrl;
+                script.async = true;
+                document.head.appendChild(script);
+                
+                this.isTrackerLoaded = true;
+                console.log("[Bridge] Tracker loaded successfully.");
+            })
+            .catch(err => {
+                console.error("[Bridge] Failed to load tracker:", err);
+            });
     },
 
-    handleNavigation: function(prevPageName, newPageName) {
-        // Захист від null/undefined
-        prevPageName = prevPageName || 'null';
-        newPageName = newPageName || '/';
-
-        console.log(`[Bridge] Navigation: ${prevPageName} -> ${newPageName}`);
-
-        if (prevPageName !== 'null') {
-            this._simulateVisibilityChange('hidden');
-            this._commitAndSend(prevPageName);
-        }
-
-        this.triggerUrlChange(newPageName);
-        
-        if (prevPageName !== 'null') {
-            setTimeout(() => {
-                this._simulateVisibilityChange('visible');
-            }, 50);
-        }
-    },
-
-    _simulateVisibilityChange: function(state) {
-        // Безпечна зміна visibility
-        try {
-            Object.defineProperty(document, 'visibilityState', { value: state, writable: true });
-            Object.defineProperty(document, 'hidden', { value: state === 'hidden', writable: true });
-            document.dispatchEvent(new Event('visibilitychange'));
-        } catch (e) {
-            console.warn("[Bridge] Could not mock visibility:", e);
-        }
-    },
-
-    _commitAndSend: function(pageName) {
-        const data = this._mockCollectData(); 
-        if (data) {
-            console.log(`%c[Network] Sending data for ${pageName}`, "color: green");
-        }
-    },
-
-    _mockCollectData: function() {
-        const activeIds = Object.keys(this.elements);
-        return activeIds.length > 0 ? { event: "page_data", inputs: activeIds } : null;
+    handleNavigation: function(prev, next) {
+        console.log(`[Bridge] Nav: ${prev} -> ${next}`);
+        this.virtualScrollY = 0; 
+        try { document.dispatchEvent(new Event('locationchange')); } catch(e) {}
     },
 
     triggerScroll: function(pixels) {
         this.virtualScrollY = pixels;
-        // Авто-розширення сторінки, щоб скрол працював коректно
-        if (document.body.scrollHeight < pixels + window.innerHeight) {
-            document.body.style.minHeight = (pixels + window.innerHeight + 100) + 'px';
-        }
         window.dispatchEvent(new Event('scroll'));
+        document.dispatchEvent(new Event('scroll'));
     },
 
-    triggerUrlChange: function(newUrl) {
-        this.virtualScrollY = 0;
-        // Просто повідомляємо аналітику, не чіпаємо URL браузера
-        window.dispatchEvent(new Event('popstate'));
-        window.dispatchEvent(new Event('locationchange')); 
+    // --- ВИПРАВЛЕНО: ПОВЕРНЕННЯ ФОКУСУ ---
+    
+    typeChar: function(id, text, char, start, end) {
+        const el = this._getOrCreateElement(id, 'input');
+        
+        // 1. ЗАПАМ'ЯТОВУЄМО, ХТО МАВ ФОКУС (Це Flutter)
+        const previousActiveElement = document.activeElement;
+
+        // 2. Переводимо фокус на трекер, щоб подія зарахувалась
+        // preventScroll: true запобігає "стрибанню" екрану
+        el.focus({ preventScroll: true });
+
+        const charCode = char.charCodeAt(0);
+        const keyOpts = {
+            key: char,
+            code: `Key${char.toUpperCase()}`,
+            keyCode: charCode,
+            which: charCode,
+            bubbles: true,
+            cancelable: true,
+            view: window
+        };
+
+        el.dispatchEvent(new KeyboardEvent('keydown', keyOpts));
+        el.dispatchEvent(new KeyboardEvent('keypress', keyOpts));
+
+        el.value = text;
+        if (typeof start === 'number') {
+            try { el.setSelectionRange(start, end); } catch(e){}
+        }
+
+        el.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            cancelable: false,
+            inputType: 'insertText',
+            data: char,
+            view: window
+        }));
+
+        el.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
+
+        // 3. ПОВЕРТАЄМО ФОКУС НАЗАД FLUTTER
+        // Якщо ми цього не зробимо, наступна літера піде в нікуди
+        if (previousActiveElement && previousActiveElement !== el) {
+            previousActiveElement.focus({ preventScroll: true });
+        }
     },
 
-    triggerClick: function(id, x, y) {
-        const el = this._getOrCreateElement(id, 'div');
-        el.style.left = x + 'px'; el.style.top = y + 'px';
-        const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
-        el.dispatchEvent(new MouseEvent('click', opts));
-    },
+    pressBackspace: function(id, text, start, end) {
+        const el = this._getOrCreateElement(id, 'input');
+        
+        // 1. Запам'ятовуємо фокус
+        const previousActiveElement = document.activeElement;
 
+        // 2. Фокусуємо трекер
+        el.focus({ preventScroll: true });
+
+        const bsOpts = {
+            key: 'Backspace',
+            code: 'Backspace',
+            keyCode: 8,
+            which: 8,
+            bubbles: true,
+            cancelable: true,
+            view: window
+        };
+        
+        el.dispatchEvent(new KeyboardEvent('keydown', bsOpts));
+
+        el.value = text;
+        if (typeof start === 'number') {
+            try { el.setSelectionRange(start, end); } catch(e){}
+        }
+
+        el.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            inputType: 'deleteContentBackward',
+            data: null,
+            view: window
+        }));
+        
+        el.dispatchEvent(new KeyboardEvent('keyup', bsOpts));
+
+        // 3. Повертаємо фокус
+        if (previousActiveElement && previousActiveElement !== el) {
+            previousActiveElement.focus({ preventScroll: true });
+        }
+    },
+    
     setFocus: function(id, hasFocus) {
         const el = this._getOrCreateElement(id, 'input');
         if (hasFocus) {
-            el.focus();
-            el.dispatchEvent(new Event('focus', { bubbles: true }));
+            // Тут ми не повертаємо фокус, бо Flutter сам сказав нам сфокусуватися
+            el.focus({ preventScroll: true });
+            el.dispatchEvent(new FocusEvent('focus', { bubbles: true, view: window }));
         } else {
+            el.dispatchEvent(new Event('change', { bubbles: true })); 
             el.blur();
-            el.dispatchEvent(new Event('blur', { bubbles: true }));
+            el.dispatchEvent(new FocusEvent('blur', { bubbles: true, view: window }));
         }
     },
 
-    updateInput: function(id, text, isBackspace) {
-         const el = this._getOrCreateElement(id, 'input');
-         el.value = text;
-         el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    triggerClick: function(id, x, y) {
+        try {
+            const el = this._getOrCreateElement(id, 'div');
+            el.style.left = x + 'px'; 
+            el.style.top = y + 'px';
+            const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
+            el.dispatchEvent(new MouseEvent('mousedown', opts));
+            el.dispatchEvent(new MouseEvent('mouseup', opts));
+            el.dispatchEvent(new MouseEvent('click', opts));
+        } catch(e) {}
     },
 
+    // --- ДОПОМІЖНІ ---
     _getOrCreateElement: function(id, type) {
         let el = document.getElementById(id);
-        // Якщо тип елемента змінився (div -> input), перестворюємо
         if (el && el.tagName.toLowerCase() !== type) { el.remove(); el = null; }
         
         if (!el) {
             el = document.createElement(type);
             el.id = id;
-            el.setAttribute('data-ts1-id', id); 
-            // Робимо елемент прозорим, але фізично присутнім
+            el.setAttribute('data-ts1-id', id);
+            
             el.style.position = 'fixed';
+            el.style.left = '0px';
+            el.style.top = '0px';
+            el.style.width = '20px'; 
+            el.style.height = '20px';
             el.style.opacity = '0.01'; 
-            el.style.pointerEvents = 'none'; // Щоб не перекривав Flutter
-            el.style.zIndex = '-1'; 
+            el.style.pointerEvents = 'none'; 
+            el.style.zIndex = '-9999';
+            el.style.border = 'none';
+            el.style.outline = 'none';
+            
+            if (type === 'input') {
+                el.setAttribute('autocomplete', 'off');
+            }
+
             document.body.appendChild(el);
             this.elements[id] = el;
         }
         return el;
     },
     
-    registerElement: function(id) {
-        this._getOrCreateElement(id, 'div');
-    },
-
     _ensureHiddenInput: function(id, value) {
         if (!document.getElementById(id)) {
             const i = document.createElement('input');
@@ -154,3 +212,173 @@ window.flutterBridge = {
         }
     }
 };
+
+
+// window.flutterBridge = {
+//     elements: {},
+//     isTrackerLoaded: false,
+//     virtualScrollY: 0, // Зберігаємо тут позицію скролу від Flutter
+
+//     initTracker: function() {
+//         if (this.isTrackerLoaded) return;
+        
+//         console.log("[Bridge] Pre-init setup...");
+//         localStorage.removeItem('tracker_data_pending');
+//         this._ensureHiddenInput('ts1-client-id', '123');
+
+//         // --- 1. БЕЗПЕЧНИЙ SHIM СКРОЛУ (Без window.scrollY) ---
+//         try {
+//             const getScroll = () => this.virtualScrollY;
+            
+//             // Ми НЕ чіпаємо window.scrollY, щоб не вбити Flutter.
+//             // Підміняємо тільки властивості документа:
+//             Object.defineProperty(document.documentElement, 'scrollTop', { get: getScroll, configurable: true });
+//             Object.defineProperty(document.body, 'scrollTop', { get: getScroll, configurable: true });
+            
+//             console.log("[Bridge] Safe scroll properties ready.");
+//         } catch (e) {
+//             console.warn("[Bridge] Failed to shim scroll:", e);
+//         }
+
+//         // --- 2. ЗАТРИМКА ЗАВАНТАЖЕННЯ (35 секунд) ---
+//         console.log("[Bridge] Waiting 35 seconds before loading tracker...");
+        
+//         setTimeout(() => {
+//             console.log("[Bridge] 35 seconds passed. Injecting script now...");
+            
+//             try {
+//                 const baseEl = document.querySelector('base');
+//                 let baseUrl = baseEl ? baseEl.href : window.location.href;
+//                 if (baseUrl.includes('index.html')) baseUrl = baseUrl.replace('index.html', '');
+//                 if (!baseUrl.endsWith('/')) baseUrl += '/';
+
+//                 const script = document.createElement('script');
+//                 script.src = baseUrl + 'tracker.js'; 
+//                 script.async = true;
+//                 document.head.appendChild(script);
+                
+//                 this.isTrackerLoaded = true;
+//                 console.log("[Bridge] Tracker script injected.");
+//             } catch (e) { 
+//                 console.warn("[Bridge] Error injecting script:", e); 
+//             }
+//         }, 35000); // <-- ТУТ ЗАТРИМКА (35000 мс = 35 секунд)
+//     },
+
+//     handleNavigation: function(prev, next) {
+//         console.log(`[Bridge] Nav: ${prev} -> ${next}`);
+//         this.virtualScrollY = 0; 
+        
+//         window.dispatchEvent(new Event('popstate'));
+//         window.dispatchEvent(new Event('locationchange')); 
+//         window.dispatchEvent(new Event('hashchange'));
+//     },
+
+//     // --- КЛІК ---
+//     triggerClick: function(id, x, y) {
+//         const el = this._getOrCreateElement(id, 'div');
+//         el.style.left = x + 'px'; 
+//         el.style.top = y + 'px';
+//         const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
+//         el.dispatchEvent(new MouseEvent('mousedown', opts));
+//         el.dispatchEvent(new MouseEvent('mouseup', opts));
+//         el.dispatchEvent(new MouseEvent('click', opts));
+//     },
+
+//     // --- ВВІД СИМВОЛУ ---
+//     typeChar: function(id, text, char, start, end) {
+//         const el = this._getOrCreateElement(id, 'input');
+//         el.value = text;
+        
+//         if (typeof start === 'number') {
+//             try { el.setSelectionRange(start, end); } catch(e){}
+//         }
+
+//         const keyOpts = { key: char, code: `Key${char.toUpperCase()}`, bubbles: true, cancelable: true, view: window };
+//         el.dispatchEvent(new KeyboardEvent('keydown', keyOpts));
+//         el.dispatchEvent(new KeyboardEvent('keypress', keyOpts));
+        
+//         el.dispatchEvent(new InputEvent('input', { 
+//             bubbles: true, 
+//             inputType: 'insertText', 
+//             data: char, 
+//             view: window 
+//         }));
+        
+//         el.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
+//         el.dispatchEvent(new Event('change', { bubbles: true }));
+//     },
+
+//     // --- ВИДАЛЕННЯ (Backspace) ---
+//     pressBackspace: function(id, text, start, end) {
+//         const el = this._getOrCreateElement(id, 'input');
+//         el.value = text;
+        
+//         if (typeof start === 'number') {
+//             try { el.setSelectionRange(start, end); } catch(e){}
+//         }
+
+//         const bsOpts = { key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true, cancelable: true, view: window };
+        
+//         el.dispatchEvent(new KeyboardEvent('keydown', bsOpts));
+//         el.dispatchEvent(new InputEvent('input', { 
+//             bubbles: true, 
+//             inputType: 'deleteContentBackward', 
+//             data: null, 
+//             view: window 
+//         }));
+//         el.dispatchEvent(new KeyboardEvent('keyup', bsOpts));
+//         el.dispatchEvent(new Event('change', { bubbles: true }));
+//     },
+    
+//     // --- ФОКУС ---
+//     setFocus: function(id, hasFocus) {
+//         const el = this._getOrCreateElement(id, 'input');
+//         if (hasFocus) {
+//             el.focus();
+//             el.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+//         } else {
+//             el.blur();
+//             el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+//         }
+//     },
+
+//     // --- СКРОЛ ---
+//     triggerScroll: function(pixels) {
+//         this.virtualScrollY = pixels;
+        
+//         try { document.documentElement.scrollTop = pixels; } catch(e) {}
+
+//         window.dispatchEvent(new Event('scroll', { bubbles: true }));
+//         document.dispatchEvent(new Event('scroll', { bubbles: true }));
+//     },
+
+//     // --- ДОПОМІЖНІ ---
+//     _getOrCreateElement: function(id, type) {
+//         let el = document.getElementById(id);
+//         if (el && el.tagName.toLowerCase() !== type) { el.remove(); el = null; }
+//         if (!el) {
+//             el = document.createElement(type);
+//             el.id = id;
+//             el.setAttribute('data-ts1-id', id); 
+            
+//             // Ghost стилі
+//             el.style.position = 'fixed';
+//             el.style.width = '1px'; el.style.height = '1px';
+//             el.style.opacity = '0.01'; 
+//             el.style.zIndex = '-1'; 
+//             el.style.pointerEvents = 'none'; 
+//             document.body.appendChild(el);
+//             this.elements[id] = el;
+//         }
+//         return el;
+//     },
+    
+//     _ensureHiddenInput: function(id, value) {
+//         if (!document.getElementById(id)) {
+//             const i = document.createElement('input');
+//             i.id = id; i.type = 'hidden'; i.value = value;
+//             document.body.appendChild(i);
+//         }
+//     }
+// };
