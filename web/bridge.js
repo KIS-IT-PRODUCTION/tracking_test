@@ -6,7 +6,7 @@ window.flutterBridge = {
     initTracker: function() {
         if (this.isTrackerLoaded) return;
         
-        console.log("[Bridge] Initializing tracking system...");
+        console.log("[Bridge] Initializing V4 (First-Click Fix)...");
         
         try {
             localStorage.removeItem('tracker_data_pending');
@@ -19,8 +19,6 @@ window.flutterBridge = {
         if (!baseUrl.endsWith('/')) baseUrl += '/';
         
         const trackerUrl = baseUrl + 'tracker.js';
-
-        console.log(`[Bridge] Loading tracker from: ${trackerUrl}`);
 
         fetch(trackerUrl)
             .then(response => response.text())
@@ -40,7 +38,7 @@ window.flutterBridge = {
                 document.head.appendChild(script);
                 
                 this.isTrackerLoaded = true;
-                console.log("[Bridge] Tracker loaded successfully.");
+                console.log("[Bridge] Tracker loaded.");
             })
             .catch(err => {
                 console.error("[Bridge] Failed to load tracker:", err);
@@ -59,18 +57,9 @@ window.flutterBridge = {
         document.dispatchEvent(new Event('scroll'));
     },
 
-    // --- ВИПРАВЛЕНО: ПОВЕРНЕННЯ ФОКУСУ ---
-    
     typeChar: function(id, text, char, start, end) {
         const el = this._getOrCreateElement(id, 'input');
         
-        // 1. ЗАПАМ'ЯТОВУЄМО, ХТО МАВ ФОКУС (Це Flutter)
-        const previousActiveElement = document.activeElement;
-
-        // 2. Переводимо фокус на трекер, щоб подія зарахувалась
-        // preventScroll: true запобігає "стрибанню" екрану
-        el.focus({ preventScroll: true });
-
         const charCode = char.charCodeAt(0);
         const keyOpts = {
             key: char,
@@ -99,23 +88,11 @@ window.flutterBridge = {
         }));
 
         el.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
-
-        // 3. ПОВЕРТАЄМО ФОКУС НАЗАД FLUTTER
-        // Якщо ми цього не зробимо, наступна літера піде в нікуди
-        if (previousActiveElement && previousActiveElement !== el) {
-            previousActiveElement.focus({ preventScroll: true });
-        }
     },
 
     pressBackspace: function(id, text, start, end) {
         const el = this._getOrCreateElement(id, 'input');
         
-        // 1. Запам'ятовуємо фокус
-        const previousActiveElement = document.activeElement;
-
-        // 2. Фокусуємо трекер
-        el.focus({ preventScroll: true });
-
         const bsOpts = {
             key: 'Backspace',
             code: 'Backspace',
@@ -127,11 +104,8 @@ window.flutterBridge = {
         };
         
         el.dispatchEvent(new KeyboardEvent('keydown', bsOpts));
-
         el.value = text;
-        if (typeof start === 'number') {
-            try { el.setSelectionRange(start, end); } catch(e){}
-        }
+        if (typeof start === 'number') { try { el.setSelectionRange(start, end); } catch(e){} }
 
         el.dispatchEvent(new InputEvent('input', {
             bubbles: true,
@@ -141,23 +115,43 @@ window.flutterBridge = {
         }));
         
         el.dispatchEvent(new KeyboardEvent('keyup', bsOpts));
-
-        // 3. Повертаємо фокус
-        if (previousActiveElement && previousActiveElement !== el) {
-            previousActiveElement.focus({ preventScroll: true });
-        }
     },
     
+    // --- ВИПРАВЛЕННЯ ТУТ ---
     setFocus: function(id, hasFocus) {
         const el = this._getOrCreateElement(id, 'input');
+        
         if (hasFocus) {
-            // Тут ми не повертаємо фокус, бо Flutter сам сказав нам сфокусуватися
-            el.focus({ preventScroll: true });
-            el.dispatchEvent(new FocusEvent('focus', { bubbles: true, view: window }));
+            // setTimeout(..., 10) - це магія.
+            // Це дозволяє реальному кліку Flutter завершитись ДО того, як ми запустимо фейковий.
+            setTimeout(() => {
+                try {
+                    const rect = el.getBoundingClientRect();
+                    const opts = {
+                        bubbles: true, cancelable: true, view: window,
+                        clientX: rect.left, clientY: rect.top
+                    };
+                    
+                    // 1. "Розігріваємо" трекер: мишка наїхала -> нажала -> відпустила -> клікнула
+                    el.dispatchEvent(new MouseEvent('mouseover', opts)); 
+                    el.dispatchEvent(new MouseEvent('mousedown', opts));
+                    el.dispatchEvent(new MouseEvent('mouseup', opts));
+                    el.dispatchEvent(new MouseEvent('click', opts));
+                    
+                    // 2. Фокусуємо
+                    el.dispatchEvent(new FocusEvent('focus', { bubbles: false, view: window }));
+                    el.dispatchEvent(new FocusEvent('focusin', { bubbles: true, view: window }));
+                    
+                } catch(e) { console.warn(e); }
+            }, 10); // Затримка 10мс критично важлива для першого разу
+            
         } else {
-            el.dispatchEvent(new Event('change', { bubbles: true })); 
-            el.blur();
-            el.dispatchEvent(new FocusEvent('blur', { bubbles: true, view: window }));
+            // Деактивація
+            setTimeout(() => {
+                el.dispatchEvent(new Event('change', { bubbles: true })); 
+                el.dispatchEvent(new FocusEvent('blur', { bubbles: false, view: window }));
+                el.dispatchEvent(new FocusEvent('focusout', { bubbles: true, view: window }));
+            }, 0);
         }
     },
 
@@ -167,6 +161,8 @@ window.flutterBridge = {
             el.style.left = x + 'px'; 
             el.style.top = y + 'px';
             const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
+            // Додаємо mouseover і тут, про всяк випадок
+            el.dispatchEvent(new MouseEvent('mouseover', opts));
             el.dispatchEvent(new MouseEvent('mousedown', opts));
             el.dispatchEvent(new MouseEvent('mouseup', opts));
             el.dispatchEvent(new MouseEvent('click', opts));
