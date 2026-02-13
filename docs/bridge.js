@@ -1,3 +1,10 @@
+/**
+ * FLUTTER TRACKER BRIDGE v5
+ * - Safe Scroll Patching (Anti-Crash)
+ * - Pure Input Simulation (No Focus Stealing)
+ * - Focus Event Bubbling (focusin/focusout)
+ * - First-Click Timing Fix (setTimeout)
+ */
 window.flutterBridge = {
     elements: {},
     isTrackerLoaded: false,
@@ -6,7 +13,7 @@ window.flutterBridge = {
     initTracker: function() {
         if (this.isTrackerLoaded) return;
         
-        console.log("[Bridge] Initializing V4 (First-Click Fix)...");
+        console.log("[Bridge] Initializing V5 (Stable)...");
         
         try {
             localStorage.removeItem('tracker_data_pending');
@@ -23,6 +30,7 @@ window.flutterBridge = {
         fetch(trackerUrl)
             .then(response => response.text())
             .then(originalCode => {
+                // ПАТЧИНГ: Замінюємо звернення до глобального скролу на наш віртуальний
                 let patchedCode = originalCode
                     .replace(/window\.scrollY/g, 'window.flutterBridge.virtualScrollY')
                     .replace(/window\.pageYOffset/g, 'window.flutterBridge.virtualScrollY')
@@ -117,13 +125,11 @@ window.flutterBridge = {
         el.dispatchEvent(new KeyboardEvent('keyup', bsOpts));
     },
     
-    // --- ВИПРАВЛЕННЯ ТУТ ---
     setFocus: function(id, hasFocus) {
         const el = this._getOrCreateElement(id, 'input');
         
         if (hasFocus) {
-            // setTimeout(..., 10) - це магія.
-            // Це дозволяє реальному кліку Flutter завершитись ДО того, як ми запустимо фейковий.
+            // Затримка 10мс дозволяє Flutter обробити нативний клік
             setTimeout(() => {
                 try {
                     const rect = el.getBoundingClientRect();
@@ -132,18 +138,18 @@ window.flutterBridge = {
                         clientX: rect.left, clientY: rect.top
                     };
                     
-                    // 1. "Розігріваємо" трекер: мишка наїхала -> нажала -> відпустила -> клікнула
+                    // Емуляція кліку для активації
                     el.dispatchEvent(new MouseEvent('mouseover', opts)); 
                     el.dispatchEvent(new MouseEvent('mousedown', opts));
                     el.dispatchEvent(new MouseEvent('mouseup', opts));
                     el.dispatchEvent(new MouseEvent('click', opts));
                     
-                    // 2. Фокусуємо
+                    // Емуляція фокусу (з focusin, який спливає)
                     el.dispatchEvent(new FocusEvent('focus', { bubbles: false, view: window }));
                     el.dispatchEvent(new FocusEvent('focusin', { bubbles: true, view: window }));
                     
                 } catch(e) { console.warn(e); }
-            }, 10); // Затримка 10мс критично важлива для першого разу
+            }, 10); 
             
         } else {
             // Деактивація
@@ -161,7 +167,7 @@ window.flutterBridge = {
             el.style.left = x + 'px'; 
             el.style.top = y + 'px';
             const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
-            // Додаємо mouseover і тут, про всяк випадок
+            
             el.dispatchEvent(new MouseEvent('mouseover', opts));
             el.dispatchEvent(new MouseEvent('mousedown', opts));
             el.dispatchEvent(new MouseEvent('mouseup', opts));
